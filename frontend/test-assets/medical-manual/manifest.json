@@ -1,0 +1,640 @@
+{
+  "id": "medical-manual-v1",
+  "title": "医疗影像运维管理系统",
+  "version": "V1.0",
+  "source": {
+    "path": "Samples/操作手册/医疗影像运维管理系统V1.0 操作手册.pdf",
+    "file": "source.pdf",
+    "pages": 16,
+    "sha256": "534e034a1d5ff0203229b204c94fbcf456b79b8031f983955e1c486626f14c7f"
+  },
+  "mapping": "原文1为系统，2至5为模块，3.x与4.x为页面。保留原编号与页码，不添加原文中不存在的页面标题。截图名称为人工核对的界面说明。",
+  "excludedObjects": [
+    {
+      "page": 5,
+      "index": 7,
+      "kind": "smask",
+      "width": 1268,
+      "height": 478,
+      "objectId": 63
+    }
+  ],
+  "headings": [
+    {
+      "number": "1",
+      "title": "医疗影像运维管理系统",
+      "page": 3,
+      "sourceLevel": 1,
+      "type": "system",
+      "parent": null
+    },
+    {
+      "number": "2",
+      "title": "数据申请审核",
+      "page": 3,
+      "sourceLevel": 1,
+      "type": "module",
+      "parent": "1"
+    },
+    {
+      "number": "3",
+      "title": "系统管理",
+      "page": 5,
+      "sourceLevel": 1,
+      "type": "module",
+      "parent": "1"
+    },
+    {
+      "number": "3.1",
+      "title": "机构管理",
+      "page": 5,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "3"
+    },
+    {
+      "number": "3.2",
+      "title": "字典管理",
+      "page": 6,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "3"
+    },
+    {
+      "number": "3.3",
+      "title": "用户管理",
+      "page": 7,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "3"
+    },
+    {
+      "number": "3.4",
+      "title": "角色管理",
+      "page": 9,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "3"
+    },
+    {
+      "number": "3.5",
+      "title": "菜单管理",
+      "page": 10,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "3"
+    },
+    {
+      "number": "3.6",
+      "title": "操作记录",
+      "page": 11,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "3"
+    },
+    {
+      "number": "4",
+      "title": "标注管理",
+      "page": 12,
+      "sourceLevel": 1,
+      "type": "module",
+      "parent": "1"
+    },
+    {
+      "number": "4.1",
+      "title": "标签管理",
+      "page": 12,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "4"
+    },
+    {
+      "number": "4.2",
+      "title": "标签模板管理",
+      "page": 13,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "4"
+    },
+    {
+      "number": "4.3",
+      "title": "工具管理",
+      "page": 14,
+      "sourceLevel": 2,
+      "type": "page",
+      "parent": "4"
+    },
+    {
+      "number": "5",
+      "title": "标注规则学习情况",
+      "page": 15,
+      "sourceLevel": 1,
+      "type": "module",
+      "parent": "1"
+    }
+  ],
+  "screenshots": [
+    {
+      "page": 3,
+      "index": 0,
+      "kind": "image",
+      "width": 1267,
+      "height": 352,
+      "objectId": 51,
+      "title": "数据申请列表",
+      "section": "2",
+      "file": "shot-000.jpg",
+      "sha256": "d67e2d313a1bf7a5dd819adbac107769fe668306a7cbe663f3c3aeafc0f3fcf3"
+    },
+    {
+      "page": 4,
+      "index": 1,
+      "kind": "image",
+      "width": 1268,
+      "height": 641,
+      "objectId": 56,
+      "title": "数据申请审核详情",
+      "section": "2",
+      "file": "shot-001.jpg",
+      "sha256": "06b25ad1d5f221eaeeab796915ce98fdec63dee719e835852b16a530c1afa727"
+    },
+    {
+      "page": 4,
+      "index": 2,
+      "kind": "image",
+      "width": 1266,
+      "height": 506,
+      "objectId": 57,
+      "title": "审核通过列表",
+      "section": "2",
+      "file": "shot-002.jpg",
+      "sha256": "d5247f0911f4c0bf1c5062e1b7d94061a32c5b43a36beb26bb8b111785ceb5a5"
+    },
+    {
+      "page": 4,
+      "index": 3,
+      "kind": "image",
+      "width": 1266,
+      "height": 508,
+      "objectId": 58,
+      "title": "审核结果详情",
+      "section": "2",
+      "file": "shot-003.jpg",
+      "sha256": "6899950c7d45fffda16646ef5e6c92a474a7d264b017ada541db757358ae22b0"
+    },
+    {
+      "page": 5,
+      "index": 4,
+      "kind": "image",
+      "width": 1266,
+      "height": 409,
+      "objectId": 61,
+      "title": "机构列表",
+      "section": "3.1",
+      "file": "shot-004.jpg",
+      "sha256": "2e46c0c7f733692c3d9a491cf8dbb63c5928e5ddbeacc4fadbaf8ce13d88a311"
+    },
+    {
+      "page": 5,
+      "index": 5,
+      "kind": "image",
+      "width": 1268,
+      "height": 246,
+      "objectId": 62,
+      "title": "部门科室管理",
+      "section": "3.1",
+      "file": "shot-005.jpg",
+      "sha256": "2014c15b78407ff80b1d88ba423c0970f898d2d5abd39b97bc0ba02dae67ab86"
+    },
+    {
+      "page": 5,
+      "index": 6,
+      "kind": "image",
+      "width": 1268,
+      "height": 478,
+      "objectId": 63,
+      "title": "部门科室及管理员编辑",
+      "section": "3.1",
+      "file": "shot-006.jpg",
+      "sha256": "9ad5385696731a9cec4a6a708969f806167286fbf836e7c4c881c97e42ee9fd7"
+    },
+    {
+      "page": 6,
+      "index": 8,
+      "kind": "image",
+      "width": 1269,
+      "height": 697,
+      "objectId": 69,
+      "title": "字典列表",
+      "section": "3.2",
+      "file": "shot-008.jpg",
+      "sha256": "06f23913e6c4a0fa8d4eafbfa09aec812cf28536ff19ff5283159582504e1fc3"
+    },
+    {
+      "page": 6,
+      "index": 9,
+      "kind": "image",
+      "width": 1267,
+      "height": 416,
+      "objectId": 70,
+      "title": "字典键值列表",
+      "section": "3.2",
+      "file": "shot-009.jpg",
+      "sha256": "05d069a1e6625fc55a041d4ad1ef1228c5ad90ebf37f909a76f94a8f1ee04561"
+    },
+    {
+      "page": 6,
+      "index": 10,
+      "kind": "image",
+      "width": 1267,
+      "height": 409,
+      "objectId": 71,
+      "title": "新增字典键值",
+      "section": "3.2",
+      "file": "shot-010.jpg",
+      "sha256": "1dee244e03d30c017af23775954bab8440db2363dbe981b79d3e093be0fab548"
+    },
+    {
+      "page": 7,
+      "index": 11,
+      "kind": "image",
+      "width": 1267,
+      "height": 395,
+      "objectId": 75,
+      "title": "编辑字典键值",
+      "section": "3.2",
+      "file": "shot-011.jpg",
+      "sha256": "1d1c80eb44d3c46ec351598a12f0bbb9e3a10e7fbd787f21e3b557c2ebab1717"
+    },
+    {
+      "page": 7,
+      "index": 12,
+      "kind": "image",
+      "width": 1269,
+      "height": 492,
+      "objectId": 76,
+      "title": "删除字典键值",
+      "section": "3.2",
+      "file": "shot-012.jpg",
+      "sha256": "73bb52f7c08bfb69c67260a0a7d0e8412c035539aa53cce3b64fffd12404bb64"
+    },
+    {
+      "page": 7,
+      "index": 13,
+      "kind": "image",
+      "width": 1154,
+      "height": 443,
+      "objectId": 77,
+      "title": "用户列表",
+      "section": "3.3",
+      "file": "shot-013.jpg",
+      "sha256": "85c22e779af2043066401650c2d9750f59a5d1f4ccedde0fdb711bd92320a3d7"
+    },
+    {
+      "page": 8,
+      "index": 14,
+      "kind": "image",
+      "width": 1268,
+      "height": 581,
+      "objectId": 81,
+      "title": "新增用户",
+      "section": "3.3",
+      "file": "shot-014.jpg",
+      "sha256": "dbcc69d64d9440b40cd18622f86b152d369b2a70d6ef7bdbad6482ad6a2a9b0f"
+    },
+    {
+      "page": 8,
+      "index": 15,
+      "kind": "image",
+      "width": 1268,
+      "height": 525,
+      "objectId": 82,
+      "title": "编辑用户",
+      "section": "3.3",
+      "file": "shot-015.jpg",
+      "sha256": "5395c048819143a353e3e7c49be6838bcd8e28c763a7e1a803d4685d1b0683a2"
+    },
+    {
+      "page": 9,
+      "index": 16,
+      "kind": "image",
+      "width": 1516,
+      "height": 756,
+      "objectId": 85,
+      "title": "用户更多操作",
+      "section": "3.3",
+      "file": "shot-016.jpg",
+      "sha256": "fc803fe2313a8d5e6601e66f83f2c874e9ed27b42eec8744de94fb5c416e9eb8"
+    },
+    {
+      "page": 9,
+      "index": 17,
+      "kind": "image",
+      "width": 1659,
+      "height": 664,
+      "objectId": 86,
+      "title": "用户角色授权",
+      "section": "3.3",
+      "file": "shot-017.jpg",
+      "sha256": "6d5ee4b074ef26273085601fe96a7e1c6c3e11b793bb1e8087047c1f38b46285"
+    },
+    {
+      "page": 9,
+      "index": 18,
+      "kind": "image",
+      "width": 1147,
+      "height": 437,
+      "objectId": 87,
+      "title": "角色列表",
+      "section": "3.4",
+      "file": "shot-018.jpg",
+      "sha256": "2659901d1f2e9b91017920e22c14c7ce0bd0298764e530eadf906801a4afa33a"
+    },
+    {
+      "page": 10,
+      "index": 19,
+      "kind": "image",
+      "width": 1267,
+      "height": 468,
+      "objectId": 91,
+      "title": "新增角色",
+      "section": "3.4",
+      "file": "shot-019.jpg",
+      "sha256": "7c55629eacefa411493f7519659d47c5d20a94359ea5dab160867cc22b68ee62"
+    },
+    {
+      "page": 10,
+      "index": 20,
+      "kind": "image",
+      "width": 1268,
+      "height": 421,
+      "objectId": 92,
+      "title": "编辑角色",
+      "section": "3.4",
+      "file": "shot-020.jpg",
+      "sha256": "6bbb1c89cc0a9fa9ab24e51d81bdf388ebd4be4a8cd460b01aa0a7e3e37d1693"
+    },
+    {
+      "page": 10,
+      "index": 21,
+      "kind": "image",
+      "width": 1160,
+      "height": 588,
+      "objectId": 93,
+      "title": "菜单列表",
+      "section": "3.5",
+      "file": "shot-021.jpg",
+      "sha256": "cbb2a9e1b7361932049dc1cc3f5edd523903ed6aba488204e304f33835c3be23"
+    },
+    {
+      "page": 11,
+      "index": 22,
+      "kind": "image",
+      "width": 1265,
+      "height": 618,
+      "objectId": 97,
+      "title": "新增菜单",
+      "section": "3.5",
+      "file": "shot-022.jpg",
+      "sha256": "9831f2822af3fe60b6a01a3c0e5930d50f9dbd121c9937d06723cdb6881c23ca"
+    },
+    {
+      "page": 11,
+      "index": 23,
+      "kind": "image",
+      "width": 1268,
+      "height": 629,
+      "objectId": 98,
+      "title": "编辑菜单",
+      "section": "3.5",
+      "file": "shot-023.jpg",
+      "sha256": "51b8b1991b67f0785a476e08a8d54dcd2a7d8472f5adfbdb3e5be0097685b862"
+    },
+    {
+      "page": 12,
+      "index": 24,
+      "kind": "image",
+      "width": 1153,
+      "height": 397,
+      "objectId": 102,
+      "title": "操作记录列表",
+      "section": "3.6",
+      "file": "shot-024.jpg",
+      "sha256": "6ffd6790992effb680a17945ba2ce27b35c05dcf1131836d09bac5adf61937dd"
+    },
+    {
+      "page": 12,
+      "index": 25,
+      "kind": "image",
+      "width": 1151,
+      "height": 405,
+      "objectId": 103,
+      "title": "标签列表",
+      "section": "4.1",
+      "file": "shot-025.jpg",
+      "sha256": "6f0118b7420a0b8e089204694da56edd6c902e58bf828b5f9596c4e81c3d9f16"
+    },
+    {
+      "page": 12,
+      "index": 26,
+      "kind": "image",
+      "width": 1268,
+      "height": 417,
+      "objectId": 104,
+      "title": "新增标签",
+      "section": "4.1",
+      "file": "shot-026.jpg",
+      "sha256": "02b7c672ef6bfaf3b3a30b7af422c18383dd990ac71dec7a0f531960dd0f3334"
+    },
+    {
+      "page": 13,
+      "index": 27,
+      "kind": "image",
+      "width": 1266,
+      "height": 430,
+      "objectId": 109,
+      "title": "编辑标签",
+      "section": "4.1",
+      "file": "shot-027.jpg",
+      "sha256": "e662008d15e84d5de135f1084443346f7335cb3e8cdb206cf164f5dd5c354307"
+    },
+    {
+      "page": 13,
+      "index": 28,
+      "kind": "image",
+      "width": 1151,
+      "height": 414,
+      "objectId": 110,
+      "title": "标签模板列表",
+      "section": "4.2",
+      "file": "shot-028.jpg",
+      "sha256": "ab7ab8eb6cf43d22e9472017443d77ab2a99e08c871c66c264dc00a2de15a531"
+    },
+    {
+      "page": 13,
+      "index": 29,
+      "kind": "image",
+      "width": 1266,
+      "height": 537,
+      "objectId": 111,
+      "title": "新增标签模板",
+      "section": "4.2",
+      "file": "shot-029.jpg",
+      "sha256": "792476829f8bd000607e3b2ccb41aeb6fb1f5c66bc487e71aaf3278aebd9c730"
+    },
+    {
+      "page": 14,
+      "index": 30,
+      "kind": "image",
+      "width": 1152,
+      "height": 344,
+      "objectId": 115,
+      "title": "标注工具列表",
+      "section": "4.3",
+      "file": "shot-030.jpg",
+      "sha256": "fcc017bed7165bf31037857ef15c953f43c652c5be51822859d20e351adcb73a"
+    },
+    {
+      "page": 14,
+      "index": 31,
+      "kind": "image",
+      "width": 1268,
+      "height": 546,
+      "objectId": 116,
+      "title": "新增标注工具",
+      "section": "4.3",
+      "file": "shot-031.jpg",
+      "sha256": "d923ed0be430efbdc67b105d0ebd868b0869c5604e6737134d13efc31c4218f5"
+    },
+    {
+      "page": 14,
+      "index": 32,
+      "kind": "image",
+      "width": 1267,
+      "height": 402,
+      "objectId": 117,
+      "title": "标注工具授权",
+      "section": "4.3",
+      "file": "shot-032.jpg",
+      "sha256": "78edfb1783fe7f3c8393e5836b074162509d6ff42e40e7a37487890d2d336c95"
+    },
+    {
+      "page": 15,
+      "index": 33,
+      "kind": "image",
+      "width": 1154,
+      "height": 397,
+      "objectId": 121,
+      "title": "标注规则学习情况列表",
+      "section": "5",
+      "file": "shot-033.jpg",
+      "sha256": "59c1521ce6ec7a0c923f1c4cfe747b92084739dd656d9304c676ee6d963216f0"
+    },
+    {
+      "page": 15,
+      "index": 34,
+      "kind": "image",
+      "width": 1265,
+      "height": 411,
+      "objectId": 122,
+      "title": "新增标注规则",
+      "section": "5",
+      "file": "shot-034.jpg",
+      "sha256": "cdd5a728b10987221efa8b8cb4245cad7a2b41e48abdca0d48b1d8e61e992acf"
+    },
+    {
+      "page": 15,
+      "index": 35,
+      "kind": "image",
+      "width": 1157,
+      "height": 464,
+      "objectId": 123,
+      "title": "下载学习记录上传模板",
+      "section": "5",
+      "file": "shot-035.jpg",
+      "sha256": "73e1a071c9d9995e92b722e7a720b9f6277207ebe50911c5f3b9c3500d3fbd55"
+    },
+    {
+      "page": 15,
+      "index": 36,
+      "kind": "image",
+      "width": 567,
+      "height": 662,
+      "objectId": 124,
+      "title": "学习记录表格模板",
+      "section": "5",
+      "file": "shot-036.jpg",
+      "sha256": "37662c5090746741a81b4f7e6e646287867b1615dbffbad15b4ab83ee4d7b467"
+    },
+    {
+      "page": 16,
+      "index": 37,
+      "kind": "image",
+      "width": 1266,
+      "height": 374,
+      "objectId": 128,
+      "title": "标注规则详情",
+      "section": "5",
+      "file": "shot-037.jpg",
+      "sha256": "770459998c6566e79a1e97c983783223aacab733257ddd0d01359195132bc6df"
+    }
+  ],
+  "sourceText": [
+    {
+      "page": 3,
+      "text": "1. 医疗影像运维管理系统\n本系统是转为医疗影像服务的运维管理系统，旨在为医学研究和\n临床诊断提供强有力的技术支持。通过精细化管理医疗影像数据的标\n注、审核、以及标准制定等多个环节，本系统有效提升了医疗影像数\n据处理的准确性和效率，同时保障了数据的安全性和隐私性。\n主要功能包括数据申请审核、系统管理、标注管理和标注规则学\n习情况。其中，系统管理中提供了对机构、字典、用户、角色、菜单\n和操作记录的管理；标准管理中提供了对标注、标签模板和工具的管\n理。\n系统也提供标注规则学习情况的功能，以供检查系统用户的标注\n规则学习状态以判断是否满足数据标注要求。\n2. 数据申请审核\n在数据申请审核界面可以对数据是申请情况进行审核。"
+    },
+    {
+      "page": 4,
+      "text": "点击审核后跳转到数据申请审核界面。在审核界面中可以查看申\n请人的申请信息，以及申请人的数据申请内容、数据申请规则和数据\n申请数量，并可以填入审核意见反馈给申请人。点击审核不通过/审\n核通过后即可将结果和审核意见一同返回给申请人。"
+    },
+    {
+      "page": 5,
+      "text": "在审核通过的页面，可以点击操作中的查看审核通过的相关信息，\n在审核不通过的页面也可以这样进行信息的查看。\n3. 系统管理\n3.1.机构管理\n在机构管理页面可以对目前系统相关的机构（医院、企业）进行\n查看、编辑。\n点击部门科室管理可以管理部门/科室内的管理员。\n点击编辑，填写部门/科室名称、编码、用户名、用户密码和相\n关描述后就可以新建部门/科室和管理员。"
+    },
+    {
+      "page": 6,
+      "text": "3.2.字典管理\n在字典管理中可以对现有字典进行新增、编辑和删除操作。\n点击左侧字典列表中的字典可以查看字典内的键和值。\n点击新增可以新增字典内的键和值。"
+    },
+    {
+      "page": 7,
+      "text": "点编辑可以进行修改。\n点删除→确定后即可对字典中的内容进行删除。\n3.3.用户管理\n在用户管理中可以对用户信息按照机构名称、部门/科室、用户\n姓名和用户类型为条件进行检索。通过添加，并可以进行编辑和进行\n角色授权、重置密码和删除操作。"
+    },
+    {
+      "page": 8,
+      "text": "点击新增可以新增用户，填写姓名、性别、用户类型、身份证、\n手机、邮箱、机构、部门、登录账户名、密码、确认密码、所在地区\n和头像。\n点击编辑可以对用户的信息进行修改，仅可以修改姓名、性别、\n身份证、手机、邮箱、所在地区和头像。"
+    },
+    {
+      "page": 9,
+      "text": "点击更多操作中的角色授权可以给用户分配不同的角色，不同角\n色的权限上会有所不同。\n3.4.角色管理\n在角色管理中可以查看目前系统有的角色和角色对应的代码、备"
+    },
+    {
+      "page": 10,
+      "text": "注和状态，可以按照角色名和状态对角色进行检索，也可以对角色进\n行添加、编辑和删除操作。\n点击添加可以新增角色，填写角色名、角色代码、备注并选择了\n分配的菜单权限后即可新增角色。\n点击编辑后可以编辑角色的名称、备注和权限内容。\n3.5.菜单管理"
+    },
+    {
+      "page": 11,
+      "text": "在菜单管理中可以根据菜单名检索菜单，并可以对菜单内容进行\n新增、编辑和删除。\n点击添加/新增，填写菜单名称、菜单类型、路由名称、path、\n页面路径、项目模块、排序、是否缓存、图标和备注可即可新增菜单。\n点击编辑可以对菜单内容进行编辑。\n3.6.操作记录"
+    },
+    {
+      "page": 12,
+      "text": "在操作记录中可以查看所有操作的记录，包括审核、读取等，可\n以按照操作名称、请求方式和参数来进行筛选检索。\n4. 标注管理\n4.1.标签管理\n在标注管理中可以通过标注字段名称、是否为官方标签和控件类\n型为条件来检索。\n点击新增标签后，填写标注字段名称、标签编码并选择控件类型\n后可以新增需要的标签。"
+    },
+    {
+      "page": 13,
+      "text": "点击编辑可以对标签的标注字段名称、标签编码、控件类型和字\n典中的情况进行修改。\n4.2.标签模板管理\n在标签模板管理中可以根据模板名称、是否为官方模板为条件进\n行检索。\n点击新增标签模板可以自行对模板进行设置，可以从左侧选择字"
+    },
+    {
+      "page": 14,
+      "text": "段。\n4.3.工具管理\n在工具管理中可以通过工具编码、工具名称、工具类型和状态对\n标注工具进行检索。\n点击新增工具，在填写标注工具编码、工具名称、版本号、路径，\n并选择工具类型、开放商、标注模板，再上传工具包后即可完成标准\n工具的新增。"
+    },
+    {
+      "page": 15,
+      "text": "点击授权可以将特定的标注工具授权给需要的机构。\n5. 标注规则学习情况\n在标注规则学习情况界面可以查看各个标注规则的学习要求和\n情况。\n点击添加规则，填写规则编码、规则名称、学习完成最低时长并\n长传规则文件后即可新增规则。\n点击下载上传模板可以得到学习记录的上传模板，填写后用于上\n传学习记录。"
+    },
+    {
+      "page": 16,
+      "text": "点击详情后可以查看当前规则的编码、名称、学习完成最低时长\n以及上传的规则文件。"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+*.local
+# Build output and caches
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+target/
+dist/
+*.log
+# Runtime data and generated artifacts
+/backend/data/
+/tmp/
+/releases/
+# Reference documents outside the source distribution
+/Demo.html
+/*.pdf
+/Samples/*
+!/Samples/操作手册/
+/Samples/操作手册/*
+!/Samples/操作手册/医疗影像运维管理系统V1.0 操作手册.pdf
