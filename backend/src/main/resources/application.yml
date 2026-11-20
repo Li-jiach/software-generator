@@ -1,19 +1,27 @@
 server:
-  port: 8080
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8080}
+  tomcat:
+    max-swallow-size: -1
 spring:
-  sql:
-    init:
-      mode: always
   datasource:
-    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/copyright_studio?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:copyright_workspace}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+  sql:
+    init:
+      mode: never
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 500MB
-ai:
-  service-url: ${AI_SERVICE_URL:http://127.0.0.1:8090}
+      max-file-size: -1
+      max-request-size: -1
+      file-size-threshold: 0
+  jackson:
+    time-zone: Asia/Shanghai
 app:
-  asset-root: ${ASSET_ROOT:./data/assets}
+  ai-url: ${AI_SERVICE_URL:http://127.0.0.1:8090}
+  service-token: ${SERVICE_TOKEN:}
+  bootstrap-password: ${BOOTSTRAP_PASSWORD:}
+  secure-cookie: ${SECURE_COOKIE:false}

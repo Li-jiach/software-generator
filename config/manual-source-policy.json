@@ -1,0 +1,6 @@
+{
+  "extensions": [".html", ".htm", ".vue", ".svelte", ".astro", ".jsx", ".tsx", ".js", ".mjs", ".cjs", ".ts", ".css", ".scss", ".less", ".md", ".java", ".kt", ".py", ".go", ".rs", ".rb", ".php", ".cs", ".sql", ".jsp", ".razor", ".cshtml", ".twig"],
+  "manifests": ["package.json", "pom.xml", "build.gradle", "build.gradle.kts", "pyproject.toml", "requirements.txt", "go.mod", "cargo.toml", "composer.json", "gemfile"],
+  "skip": ["node_modules", "dist", "build", "target", "coverage", "vendor", "venv", "__pycache__", "bin", "obj", "secrets", "credentials"],
+  "maxFileBytes": 160000
+}

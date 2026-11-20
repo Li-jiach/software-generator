@@ -1,0 +1,8 @@
+{
+  "base_url": "",
+  "api_key": "",
+  "model": "",
+  "reasoning_effort": "default",
+  "timeout_seconds": 120,
+  "max_context_chars": 16000
+}

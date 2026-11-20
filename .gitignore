@@ -20,7 +20,15 @@ dist/
 # Reference documents outside the source distribution
 /Demo.html
 /*.pdf
-/Samples/*
-!/Samples/操作手册/
-/Samples/操作手册/*
-!/Samples/操作手册/医疗影像运维管理系统V1.0 操作手册.pdf
+/[Ss]amples/
+/trash/
+/*.docx
+
+# Assistant credentials and local runtime
+/config/assistant.json
+/.run/
+/.env.local
+/backend/src/main/resources/static/
+/.pytest_cache/
+
+/data/
