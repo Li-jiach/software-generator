@@ -1,4 +1,5 @@
 """End-to-end checks against running Java/Python/MySQL, with disposable records only."""
+import base64
 import json
 import io
 import zipfile
@@ -24,6 +25,7 @@ user_ids = []
 stored_files = []
 checks = 0
 seen = []
+force_vision_rejection = threading.Event()
 server = None
 
 
@@ -57,7 +59,19 @@ class Provider(BaseHTTPRequestHandler):
         prompt = payload['messages'][0]['content']
         if prompt.startswith('操作手册任务：'):
             task = prompt.split('：', 1)[1].split('。', 1)[0]
-            data = json.loads(payload['messages'][-1]['content'])
+            if task == '后端源码分析' and payload.get('stream'):
+                self.close_connection = True
+                return
+            user_content = payload['messages'][-1]['content']
+            if task == '截图核验':
+                assert [part['type'] for part in user_content] == ['text', 'image_url']
+                image_url = user_content[1]['image_url']['url']
+                assert image_url.startswith('data:image/jpeg;base64,')
+                jpeg = base64.b64decode(image_url.split(',', 1)[1], validate=True)
+                assert jpeg.startswith(b'\xff\xd8') and jpeg.endswith(b'\xff\xd9')
+                data = json.loads(user_content[0]['text'])
+            else:
+                data = json.loads(user_content)
             content = json.dumps(manual_response(task, data), ensure_ascii=False)
         elif '每次只返回一个JSON对象' in prompt:
             task=json.loads(payload['messages'][-1]['content'])
@@ -70,7 +84,7 @@ class Provider(BaseHTTPRequestHandler):
                     plan={'action':'read_attachment','args':{'id':observations[0]['result'][0]['id'],'entry':entry}}
                 else:
                     short_name=observations[-1]['result']['text'].removeprefix('软件简称：')
-                    plan={'action':'fill_form','args':{'fields':{'shortName':short_name}}}
+                    plan={'action':'fill_form','args':{'projectId':task['context']['projectId'],'fields':{'shortName':short_name}}}
                 content=json.dumps(plan,ensure_ascii=False)
             elif question=='哪个软著的附件提到了 PrivateEvidence？':
                 step = {'action':'search_projects','args':{'query':'PrivateEvidence'}}
@@ -88,10 +102,34 @@ class Provider(BaseHTTPRequestHandler):
                     plan={'action':'read_attachment','args':{'id':manual['id'],'query':'软件简称'}}
                 else:
                     assert any('软件简称：手册示例' in excerpt for excerpt in observations[-1]['result']['excerpts'])
-                    plan={'action':'fill_form','args':{'fields':{'shortName':'手册示例'},'missing':'著作权人'}}
+                    plan={'action':'fill_form','args':{'projectId':task['context']['projectId'],'fields':{'shortName':'手册示例'},'missing':'著作权人'}}
                 content=json.dumps(plan,ensure_ascii=False)
             elif question=='帮我填写著作权人':
-                content=json.dumps({'action':'fill_form','args':{'fields':{'copyrightOwner':'越权修改'}}})
+                content=json.dumps({'action':'fill_form','args':{'projectId':task['context']['projectId'],'fields':{'copyrightOwner':'越权修改'}}})
+            elif question=='刚才具体修改了什么？':
+                writes=[event for event in task['context']['recentOperations'] if event['action']=='fill_form' and event['changes']]
+                if writes:
+                    event=writes[-1]
+                    change=event['changes'][0]
+                    assert event['projectId']==task['context']['projectId']
+                    assert task['context']['form']['shortName']=='人工修订简称'
+                    assert any(log['title']=='保存填报草稿' and '软件简称' in log['detail'] for log in task['context']['recentProjectActivity'])
+                    plan={'action':'answer','answer':f"{event['projectName']}：{change['label']}从「{change['before']}」改为「{change['after']}」。"}
+                else:
+                    plan={'action':'answer','answer':'当前会话没有已保存的修改。'}
+                content=json.dumps(plan,ensure_ascii=False)
+            elif question=='帮我把刚才查的项目的软件简称改成测试':
+                lookup=next(event for event in reversed(task['context']['recentOperations']) if event['action']=='project_rag')
+                content=json.dumps({'action':'fill_form','args':{'projectId':lookup['projectId'],'fields':{'shortName':'错误项目'}}})
+            elif question=='刚才那个项目的版本呢？':
+                lookup=next(event for event in reversed(task['context']['recentOperations']) if event['action']=='project_rag')
+                plan={'action':'search_projects','args':{'query':lookup['projectId']}}
+                if observations:
+                    plan={'action':'project_rag','args':{'projectId':observations[0]['result'][0]['id'],'query':'版本'}}
+                content=json.dumps(plan)
+            elif question=='帮我把软件简称改成来自跨项目附件的简称':
+                content=json.dumps({'action':'fill_form','args':{'projectId':task['context']['projectId'],'fields':{'shortName':'来自跨项目附件的简称'}}})
+
             elif question=='这个项目的填写和审核状态怎么样？':
                 content=json.dumps({'action':'status'})
             else:
@@ -100,11 +138,14 @@ class Provider(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type','text/event-stream')
             self.end_headers()
+            if prompt.startswith('操作手册任务：目录文件分类。'):
+                reasoning = json.dumps({'choices': [{'delta': {'reasoning_content': 'PRIVATE_MODEL_REASONING'}}]})
+                self.wfile.write(('data: '+reasoning+'\n\n').encode())
             for part in (content[:8],content[8:]):
                 event=json.dumps({'choices':[{'delta':{'content':part},'finish_reason':None}]},ensure_ascii=False)
                 self.wfile.write(('data: '+event+'\n\n').encode())
                 self.wfile.flush()
-                time.sleep(.15)
+                time.sleep(2.5 if prompt.startswith('操作手册任务：目录文件分类。') and part == content[:8] else .15)
             self.wfile.write(b'data: [DONE]\n\n')
             return
         body = json.dumps({"choices": [{"message": {"content": content}}], "usage": {"total_tokens": 42}}, ensure_ascii=False).encode()
@@ -132,30 +173,56 @@ def manual_response(task, data):
     pages = [
         {'id': 'home', 'moduleId': 'workspace', 'title': '项目首页', 'description': '资料入口。',
          'source': '项目样例/index.html', 'steps': [], 'visibleText': '项目首页'},
+        {'id': 'unreachable', 'moduleId': 'error', 'title': '服务异常页', 'description': '服务异常时出现。',
+         'source': '项目样例/index.html', 'steps': [], 'visibleText': '服务遇到异常'},
         {'id': 'list', 'moduleId': 'files', 'title': '资料管理', 'description': '查看资料和版本。',
          'source': '项目样例/index.html', 'steps': [navigate], 'visibleText': '资料管理'},
     ]
     match task:
-        case '目录文件筛选':
+        case '目录文件分类':
             assert set(data['directory']) == {'项目样例/index.html','项目样例/backend/ProjectController.java','项目样例/tools/demo.py'}
-            return {'paths': ['项目样例/index.html','项目样例/backend/ProjectController.java']}
-        case '源码分批盘点':
+            return {'frontend': ['项目样例/index.html'], 'backend': ['项目样例/backend/ProjectController.java'],
+                    'other': ['项目样例/tools/demo.py']}
+        case '前端源码分析':
+            assert {entry['path'] for entry in data} == {'项目样例/index.html'}
             assert any('版本详情' in entry['text'] for entry in data)
-            assert any('ProjectController' in entry['text'] for entry in data)
-            assert all('UNSELECTED_SCRIPT' not in entry['text'] for entry in data)
             return {'facts': 'index.html 含项目首页、资料管理和版本详情对话框。'}
+        case '后端源码分析':
+            assert {entry['path'] for entry in data} == {'项目样例/backend/ProjectController.java'}
+            assert any('ProjectController' in entry['text'] for entry in data)
+            return {'facts': 'ProjectController.java 声明了项目控制器。'}
         case '功能目录':
             return {'overview': '用于查阅测试项目的资料与版本。', 'modules': [
                 {'id': 'workspace', 'parentId': None, 'title': '项目工作区'},
                 {'id': 'files', 'parentId': 'workspace', 'title': '资料管理'},
+                {'id': 'error', 'parentId': 'workspace', 'title': '异常界面'},
             ]}
         case '页面与点击路径':
             return {'pages': pages}
         case '主要功能操作':
             return {'operations': [{'id': 'detail', 'pageId': 'list', 'title': '查看版本详情',
-                                    'description': '弹窗显示版本信息。', 'instructions': ['点击查看详情。', '读取版本记录。'], 'capture': True}]}
+                                    'description': '弹窗显示版本信息。', 'instructions': ['点击查看详情。', '读取版本记录。'], 'capture': True},
+                                   {'id': 'log-detail', 'pageId': 'list', 'title': '展开日志详情',
+                                    'description': '有日志时可展开详情。', 'instructions': ['点击日志条目。'], 'capture': True},
+                                   {'id': 'error-detail', 'pageId': 'unreachable', 'title': '异常详情',
+                                    'description': '查看异常详情。', 'instructions': ['点击查看错误详情。'], 'capture': True},
+                                   {'id': 'rejected-detail', 'pageId': 'list', 'title': '版本详情补充视图',
+                                    'description': '查看版本详情。', 'instructions': ['点击查看详情。'], 'capture': True}]}
         case '截图脚本计划':
-            return {'targets': [{'operationId': 'detail', 'steps': [detail], 'visibleText': '版本详情'}]}
+            targets = [{'operationId': 'detail', 'steps': [detail], 'visibleText': '版本详情'},
+                       {'operationId': 'error-detail', 'steps': [{'role': 'button', 'label': '查看错误详情'}],
+                        'visibleText': '详细错误'},
+                       {'operationId': 'rejected-detail', 'steps': [detail], 'visibleText': '版本详情'}]
+            if 'validationFeedback' not in data:
+                return {'targets': targets + [{'operationId': 'log-detail', 'steps': [], 'visibleText': '暂无日志'}]}
+            assert 'targets.3.steps (too_short)' in data['validationFeedback']
+            return {'targets': targets, 'skipped': [{'operationId': 'log-detail', 'cause': 'missing_data',
+                                                     'reason': '初始状态没有可展开的日志条目。'}]}
+        case '截图核验':
+            if (force_vision_rejection.is_set() or data['target'] == '版本详情补充视图'
+                    or (data['target'] == '查看版本详情' and data['attempt'] == 1)):
+                return {'approved': False, 'reason': '目标区域需要更宽的视口。', 'repair': 'wide'}
+            return {'approved': True, 'reason': f"图中可见{data['visibleText']}。"}
         case '手册撰写':
             if 'page' not in data:
                 return {'text': '此工作区汇集测试项目的资料与文件版本。'}
@@ -176,6 +243,11 @@ def await_job(client, path, status):
         assert job['status'] == 'running', job.get('error') or job['status']
         time.sleep(0.35)
     raise AssertionError(f'expected manual job status {status}')
+
+
+def chrome_executable():
+    path = env.get('MANUAL_CHROMIUM_PATH')
+    return {'executable_path': path} if path else {'channel': 'chrome'}
 
 
 def project_page(browser, client, project_id, route):
@@ -201,17 +273,75 @@ def start_manual_from_folder(client, project_id):
             file = folder / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text(data, encoding='utf-8')
-        browser = playwright.chromium.launch(executable_path=env.get('MANUAL_CHROMIUM_PATH') or None)
+        browser = playwright.chromium.launch(**chrome_executable())
         try:
             page = project_page(browser, client, project_id, 'source')
-            page.get_by_label('选择项目文件夹').set_input_files(folder)
-            page.get_by_text('已在默认浏览器打开测试站点', exact=False).click()
-            with page.expect_response(lambda response: response.url.endswith('/manual-jobs')
+            page.get_by_role('button', name='选择路径', exact=True).wait_for()
+            start = page.get_by_role('button', name='开始分析', exact=True)
+            generate = page.get_by_role('button', name='生成截图计划')
+            expect(start.is_disabled(), 'analysis requires a source selection')
+            project_path = f'/projects/{project_id}'
+            source_zip = Path(tmp) / '直接上传.zip'
+            with zipfile.ZipFile(source_zip, 'w') as archive:
+                archive.writestr('index.html', FIXTURE)
+            with page.expect_file_chooser() as chooser:
+                page.get_by_role('button', name='使用源码 ZIP').click()
+            with page.expect_response(lambda response: response.url.endswith(project_path + '/files')
+                                      and response.request.method == 'POST') as upload:
+                chooser.value.set_files(source_zip)
+            assert upload.value.ok, upload.value.text()
+            page.get_by_text('已上传 直接上传.zip', exact=True).wait_for()
+            expect(page.get_by_role('combobox', name='项目源码附件').count() == 0
+                   and start.is_enabled()
+                   and request(client, 'GET', project_path + '/manual-jobs').json()['job'] is None,
+                   'ZIP button opens the file chooser and uploads without starting analysis')
+            page.get_by_label('选择路径', exact=True).set_input_files(folder)
+            page.get_by_text('已选择 项目样例', exact=True).wait_for()
+            expect(request(client, 'GET', project_path + '/manual-jobs').json()['job'] is None
+                   and all(f['name'] != '项目样例.zip' for f in request(client, 'GET', project_path).json()['files']),
+                   'source selection alone neither uploads the folder nor creates a job')
+            with page.expect_response(lambda response: response.url.endswith('/manual-jobs/source')
                                       and response.request.method == 'POST') as response:
-                page.get_by_role('button', name='开始分析').click()
+                start.click()
             result = response.value
             assert result.ok, result.text()
-            return result.json()
+            job = result.json()
+            spinner = page.locator('.manual-spinner')
+            spinner.wait_for()
+            expect(spinner.evaluate("el => getComputedStyle(el).animationName") == 'manual-spin',
+                   'manual progress animates while the task runs')
+            logs = page.get_by_role('complementary', name='解析日志')
+            logs.get_by_text('{"fronte', exact=True).wait_for()
+            expect(logs.get_by_text('接收中…', exact=True).is_visible(), 'partial model content appears before the reply completes')
+            page.get_by_text('index.html 含项目首页、资料管理和版本详情对话框。', exact=True).wait_for()
+            page.get_by_text('ProjectController.java 声明了项目控制器。', exact=True).wait_for()
+            spinner.wait_for(state='hidden')
+            expect('PRIVATE_MODEL_REASONING' not in logs.inner_text() and '前端源码分析' in logs.inner_text(),
+                   'manual log retains model replies without private reasoning content')
+            expect(generate.is_disabled(), 'manual source analysis can finish before browser confirmation')
+            expect(page.get_by_text('保存测试站点入口并勾选 Chrome 确认后', exact=False).is_visible()
+                   and page.locator('.manual-phases .done').get_by_text('源码分析').is_visible(),
+                   'completed source analysis shows what is needed to resume')
+            ready = page.get_by_role('checkbox', name='已在 Google Chrome 中打开测试站点', exact=False)
+            help_button = page.get_by_role('button', name='查看开发者模式打开方式')
+            guide_panel = page.locator('dialog.manual-guide')
+            assert not guide_panel.is_visible(), 'tutorial stays hidden before opening'
+            help_button.click()
+            guide = page.get_by_role('dialog', name='打开 Chrome 开发者工具')
+            expect(guide.is_visible() and guide.get_by_text('Windows / Linux', exact=False).is_visible()
+                   and guide.get_by_text('macOS', exact=False).is_visible(), 'Chrome DevTools help shows both keyboard shortcuts')
+            guide.get_by_role('button', name='关闭', exact=True).click()
+            guide_panel.wait_for(state='hidden')
+            expect(not ready.is_checked(), 'tutorial dismisses without changing browser confirmation')
+            with page.expect_response(lambda response: response.url.endswith('/' + job['id'] + '/generate')
+                                      and response.request.method == 'POST') as response:
+                ready.check()
+            assert response.value.ok, response.value.text()
+            active_phase = page.locator('.manual-phases .running')
+            active_phase.wait_for()
+            expect(active_phase.evaluate("el => getComputedStyle(el, '::after').animationName") == 'manual-phase-sweep',
+                   'checking Chrome automatically starts planning and animates its active phase')
+            return job
         finally:
             browser.close()
 
@@ -219,7 +349,7 @@ def start_manual_from_folder(client, project_id):
 def verify_screenshot_settings_ui(client, project_id, url):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(executable_path=env.get('MANUAL_CHROMIUM_PATH') or None)
+        browser = playwright.chromium.launch(**chrome_executable())
         try:
             page = project_page(browser, client, project_id, 'source')
             entry = page.get_by_label('本机测试站点入口')
@@ -236,7 +366,7 @@ def verify_screenshot_settings_ui(client, project_id, url):
 def verify_assistant_fill_ui(client, project_id, question):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(executable_path=env.get('MANUAL_CHROMIUM_PATH') or None)
+        browser = playwright.chromium.launch(**chrome_executable())
         try:
             page = project_page(browser, client, project_id, 'basic')
             page.get_by_role('button', name='软著助手', exact=True).click()
@@ -245,6 +375,11 @@ def verify_assistant_fill_ui(client, project_id, question):
             page.get_by_text('AI 仅供参考', exact=True).wait_for()
             expect(page.get_by_label('软件简称').input_value() == '来自跨项目附件的简称',
                    'the assistant updates and marks the visible form input')
+            page.reload()
+            page.get_by_role('button', name='软著助手', exact=True).click()
+            page.get_by_text('本轮操作', exact=True).last.click()
+            expect(page.get_by_text('修改后 · 来自跨项目附件的简称', exact=True).is_visible(),
+                   'saved assistant operations remain visible after reload')
         finally:
             browser.close()
 
@@ -253,7 +388,7 @@ def verify_workspace_ui(client, project_id):
     from playwright.sync_api import sync_playwright
     origin = BASE.removesuffix('/api')
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(executable_path=env.get('MANUAL_CHROMIUM_PATH') or None)
+        browser = playwright.chromium.launch(**chrome_executable())
         try:
             page = project_page(browser, client, project_id, 'basic')
             actions = page.locator('.form-footer-actions')
@@ -276,26 +411,188 @@ def verify_workspace_ui(client, project_id):
             browser.close()
 
 
+def verify_review_ui(admin, project_id):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(**chrome_executable())
+        try:
+            page = project_page(browser, admin, project_id, 'reviews')
+            form = page.locator(f'#review-form-{project_id}')
+            form.wait_for()
+            sections = form.locator('..').locator(':scope > details')
+            expect(sections.count() == 4 and form.locator('..').locator(':scope > details[open]').count() == 0,
+                   'the four review sections are collapsed on entry')
+            form.locator(':scope > summary').click()
+            expect(form.get_by_role('button').all_text_contents() == ['通过', '不通过'],
+                   'the form has one approval and one rejection action')
+            form.get_by_role('button', name='不通过', exact=True).click()
+            dialog = page.get_by_role('dialog', name='审核不通过')
+            confirm = dialog.get_by_role('button', name='确认不通过')
+            expect(confirm.is_disabled(), 'a rejection requires a reason')
+            dialog.get_by_label('不通过原因').fill('请补充实际开发目的')
+            expect(confirm.is_enabled(), 'entering a reason enables rejection')
+            dialog.get_by_role('button', name='取消').click()
+            form.locator(':scope > summary').click()
+            expect(form.get_attribute('open') is None, 'the review section can be collapsed again')
+        finally:
+            browser.close()
+
+
+def verify_official_macro(page, macro):
+    data = {
+        'fullName':'测试软件','version':'V2.0','shortName':'测试','rights':'全部权利',
+        'devFinish':'2025-06-01','devCPU':'测试型号','devRAM':'16 GB',
+        'runCPU':'运行型号','runRAM':'8 GB','languages':'Java,Python'
+    }
+    portal_html = """<meta charset="utf-8"><body><script>
+        const pages = {
+          application: `
+            <section class="fillin_item"><h3>软件全称</h3><input id="name"></section>
+            <section class="fillin_item"><h3>版本号</h3><input id="version"></section>
+            <section class="fillin_item"><h3>软件简称</h3><input id="short"></section>
+            <section class="fillin_item"><h3>权利范围</h3>
+             <label><input style="display:none" type="radio" name="rights">部分权利</label>
+             <label><input style="display:none" type="radio" name="rights" id="all">全部权利</label>
+            </section>`,
+          development:'<section class="fillin_item"><h3>开发完成日期</h3><input type="date" id="date"></section>',
+          features:`
+            <section class="fillin_item"><h3>开发的硬件环境</h3><textarea id="dev"></textarea></section>
+            <section class="fillin_item"><h3>运行的硬件环境</h3><textarea id="run"></textarea></section>
+            <section class="fillin_item"><h3>编程语言</h3>
+             <label><input style="display:none" type="checkbox" id="java">Java</label>
+             <label><input style="display:none" type="checkbox" id="python">Python</label>
+            </section>`
+        };
+        function render(stage) {
+          history.replaceState(null,'','#/'+stage);
+          document.body.innerHTML = pages[stage]+'<button>下一步</button>';
+          document.querySelector('button').onclick = () => {
+            if (stage==='application') {
+              const inputs = ['#name','#version','#short'].map(selector=>document.querySelector(selector).value);
+              if (inputs.join('|')==='测试软件|V2.0|测试' && document.querySelector('#all').checked) render('development');
+            }
+            if (stage==='development' && document.querySelector('#date').value==='2025-06-01') render('features');
+            if (stage==='features') history.replaceState(null,'','#/confirm');
+          };
+        }
+        if (location.pathname==='/registration.html') {
+          document.body.innerHTML=(sessionStorage.signedIn?'<span>用户中心</span>':'<span>登录</span>')+
+            '<table><tr><td><h1>计算机软件著作权登记申请</h1><button>立即登记</button></td></tr></table>';
+          document.querySelector('button').onclick=()=>{location.href='/r11.html#/identity'};
+        } else if(location.pathname==='/login.html') {
+          document.body.innerHTML='<button id="org">机构</button><div id="login"></div>';
+          document.querySelector('#org').onclick = () => {
+            document.querySelector('#login').innerHTML='<span>管理员</span><span>密码登录</span>'+
+              '<input placeholder="请输入账号"><input type="password"><button id="submit">立即登录</button>';
+            document.querySelector('#submit').onclick=()=>{
+              const [username,password]=document.querySelectorAll('input');
+              if (username.value==='fixture-admin' && password.value==='fixture-password') {
+                // The real site requires a human to complete this handoff.
+                document.querySelector('#login').innerHTML='<button id="verify">人工安全验证</button>';
+                document.querySelector('#verify').onclick=()=>{
+                  sessionStorage.signedIn='yes';
+                  location.href='/account.html';
+                };
+              }
+            };
+          };
+        } else if(location.pathname==='/r11.html') {
+          document.body.innerHTML='<h2>我是申请人</h2>';
+          document.querySelector('h2').onclick=()=>render('application');
+        }
+      </script>"""
+    def serve_portal(route):
+        route.fulfill(content_type='text/html',body=portal_html)
+    def serve_payload(route):
+        redeemed = route.fetch()
+        assert redeemed.ok, 'the actual launch endpoint validates the ticket'
+        route.fulfill(json={'form':data,'login':{'username':'fixture-admin','password':'fixture-password'}})
+
+    page.context.route('https://register.ccopyright.com.cn/**',serve_portal)
+    page.context.route('**/official-application/consume',serve_payload)
+    try:
+        setup = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialStarted')
+        tick = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialStep')
+        expect('fixture-password' not in str(macro), 'the browser macro stores no credentials')
+        page.evaluate('code => new Function(code)()',setup)
+        page.wait_for_selector('#official-live[data-official-state=running]',state='attached')
+        frame = page.frame_locator('#official-browser')
+        manual = False
+        for _ in range(90):
+            portal_frame = next((item for item in page.frames if item.url.startswith('https://register.ccopyright.com.cn/')), None)
+            if portal_frame:
+                try:
+                    portal_frame.evaluate('code => new Function(code)()',tick)
+                except Exception as error:
+                    if 'Execution context was destroyed' not in str(error):
+                        raise
+            if frame.locator('#verify').is_visible():
+                expect('安全验证' in page.locator('#official-live [role=status]').inner_text(),
+                       'the workbench keeps the actual verification controls interactive')
+                frame.get_by_role('button',name='人工安全验证').click()
+                manual = True
+            if page.locator('#official-live').get_attribute('data-official-state')=='done':
+                break
+            page.wait_for_timeout(70)
+        expect(manual and '已填写' in page.locator('#official-live [role=status]').inner_text(),
+               'the macro waits for the operator and fills all three R11 stages')
+        expect(frame.locator('#dev').input_value()=='CPU 测试型号，内存 16 GB' and
+               frame.locator('#run').input_value()=='CPU 运行型号，内存 8 GB' and
+               frame.locator('#java').is_checked() and frame.locator('#python').is_checked(),
+               'operator can see the written fields in the live browser frame')
+        expect(any(item.url.endswith('#/features') for item in page.frames), 'the macro stops before confirmation')
+    finally:
+        page.context.unroute('https://register.ccopyright.com.cn/**',serve_portal)
+        page.context.unroute('**/official-application/consume',serve_payload)
+
+
 def verify_application_ui(client, admin, project_id):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(executable_path=env.get('MANUAL_CHROMIUM_PATH') or None)
+        browser = playwright.chromium.launch(**chrome_executable())
         try:
             page = project_page(browser, client, project_id, 'rpa')
-            page.get_by_role('heading', name='申报流程与执行记录').wait_for()
+            page.get_by_role('heading', name='实时申报状态').wait_for()
+            expect(page.get_by_role('heading', name='申报流程与执行记录').count()==0,
+                   'the live status replaces the execution timeline on the application page')
             expect(page.locator('.sidebar .brand').inner_text().strip() == '', 'sidebar brand title is removed')
-            page.get_by_role('button', name='启动申报预览').click()
-            spinner = page.locator('.step-spinner')
-            spinner.wait_for()
-            expect(spinner.evaluate('el => getComputedStyle(el).animationName') == 'application-spin',
-                   'current application step displays an animated spinner')
-            page.get_by_text('填写及上传流程预览完成，等待接入官网', exact=False).wait_for()
-            expect(page.locator('.timeline-point.good').count() == 2, 'completed preview steps display check marks')
+            page.evaluate("""
+                () => {
+                    document.documentElement.setAttribute('data-kantu', '1');
+                    window.addEventListener('kantuSaveAndRunMacro', (event) => {
+                        window.launchMacro = event.detail.json;
+                        window.dispatchEvent(new CustomEvent('kantuInvokeSuccess'));
+                    });
+                }
+            """)
+            initial_url = page.url
+            for attempt in range(2):
+                page.evaluate('window.launchMacro = null')
+                page.get_by_role('button', name='启动申报', exact=True).click()
+                page.wait_for_function('window.launchMacro !== null')
+                expect(page.url == initial_url and len(page.context.pages)==1 and
+                       page.locator('#official-live #official-browser').count()==1,
+                       'starting leaves the interactive official frame on the original workspace page')
+                macro = page.evaluate('window.launchMacro')
+                select_window, wait_for_panel = macro['Commands'][:2]
+                expect(select_window['Target'] == 'title=' + page.title()
+                       and page.locator(wait_for_panel['Target'].removeprefix('css=')).count()==1,
+                       'Ui.Vision targets the active workbench tab and its launch panel')
+                expect(macro['Name'] == 'Copyright_R11_Fill' and any(cmd['Command']=='selectFrame' for cmd in macro['Commands'])
+                       and '联调验证项目' not in str(macro), 'application button launches a reusable macro without saved form data')
+                if attempt == 0:
+                    verify_official_macro(page, macro)
             page.set_viewport_size({'width': 390, 'height': 844})
             expect(page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'application preview fits a mobile viewport')
             expect(page.get_by_role('heading', name='申报页面', exact=True).count() == 0
                    and page.get_by_role('heading', name='人工合规核验', exact=True).count() == 0,
                    'obsolete application panels are removed')
+            account = project_page(browser, admin, project_id, 'official-account')
+            account.get_by_label('机构管理员账号').wait_for()
+            expect(account.get_by_label('机构管理员账号').is_visible() and not account.get_by_label('官网密码').input_value(),
+                   'the admin settings do not echo a saved password')
+            expect(page.get_by_role('button', name='官网账号', exact=True).count() == 0,
+                   'the account settings are hidden for contributors')
             users = project_page(browser, admin, project_id, 'users')
             users.get_by_role('button', name='注册账号').click()
             expect(users.locator('#account-department option').all_text_contents()[1:] ==
@@ -335,16 +632,24 @@ try:
     request(office, "POST", f"/projects/{pid}/form/submit", expected=409, json={"revision": invalid["revision"]})
     p = request(office, "POST", f"/projects/{pid}/form/submit", json={"revision": p["revision"]}).json()
     expect(p["formStatus"] == "submitted", "submit for review")
-    request(research, "POST", f"/projects/{pid}/form/review", expected=403, json={"field": "all", "status": "approved"})
-    request(admin, "POST", f"/projects/{pid}/form/review", expected=400, json={"field": "purpose", "status": "returned", "comment": ""})
-    p = request(admin, "POST", f"/projects/{pid}/form/review", json={"field": "purpose", "status": "returned", "comment": "请补充实际开发目的"}).json()
-    expect(p["formStatus"] == "returned", "review rejection")
+    verify_review_ui(admin, pid)
+    form_review = f"/projects/{pid}/form/review"
+    decision = {"revision": p["revision"], "status": "approved"}
+    request(research, "POST", form_review, expected=403, json=decision)
+    request(admin, "POST", form_review, expected=400, json={**decision, "field": "purpose"})
+    request(admin, "POST", form_review, expected=400, json={**decision, "status": "returned", "comment": " "})
+    reason = "请补充实际开发目的"
+    p = request(admin, "POST", form_review, json={**decision, "status": "returned", "comment": reason}).json()
+    expect(p["formStatus"] == "returned" and p["formReviews"]["all"]["comment"] == reason, "form-level rejection records its reason")
+    request(admin, "POST", form_review, expected=409, json={**decision, "revision": p["revision"]})
     p = request(research, "PUT", f"/projects/{pid}/form", json={"revision": p["revision"], "fields": {"purpose": "提升科研机构的软件资料管理效率"}}).json()
-    request(office, "POST", f"/projects/{pid}/form/submit")
-    p = request(admin, "POST", f"/projects/{pid}/form/review", json={"field": "all", "status": "approved"}).json()
-    expect(p["formStatus"] == "approved", "bulk approval")
+    expect("all" not in p["formReviews"], "changing the form invalidates its previous review")
+    p = request(office, "POST", f"/projects/{pid}/form/submit").json()
+    request(admin, "POST", form_review, expected=409, json=decision)
+    p = request(admin, "POST", form_review, json={**decision, "revision": p["revision"]}).json()
+    expect(p["formStatus"] == "approved" and p["formReviews"]["all"]["status"] == "approved", "form-level approval")
     p = request(research, "PUT", f"/projects/{pid}/form", json={"revision": p["revision"], "fields": {"purpose": "再次修改开发目的"}}).json()
-    expect(p["formStatus"] == "draft" and "purpose" not in p["formReviews"], "changing reviewed value invalidates approval")
+    expect(p["formStatus"] == "draft" and "all" not in p["formReviews"], "changing an approved form invalidates approval")
     content = "项目内部资料：隔离测试标记PrivateEvidence。源程序每页不少于50行。".encode()
     one = request(office, "POST", f"/projects/{pid}/files", files={"file": ("填报测试资料.txt", content, "text/plain")}, data={"category": "技术文档"}).json()
     two = request(office, "POST", f"/projects/{pid}/files", files={"file": ("填报测试资料.txt", content + b" v2", "text/plain")}, data={"category": "技术文档"}).json()
@@ -377,6 +682,7 @@ try:
     expect(not any(n['projectId']==pid and n['kind']=='manual' for n in request(office,'GET','/notifications').json()),'pending review is assigned to administrator')
     request(research,'POST',f'/projects/{pid}/manual/review',expected=403,json={'revision':manual['revision'],'status':'approved'})
     request(office,'PUT',f'/projects/{pid}/manual',expected=409,json={'revision':manual['revision'],'chapters':[]})
+    request(admin,'POST',f'/projects/{pid}/manual/review',expected=400,json={'revision':manual['revision'],'status':'returned','comment':' '})
     manual=request(admin,'POST',f'/projects/{pid}/manual/review',json={'revision':manual['revision'],'status':'returned','comment':'补充操作结果'}).json()
     expect(any(n['projectId']==pid and n['kind']=='manual' and n['status']=='returned' for n in request(office,'GET','/notifications').json()),'returned manual is assigned to project contributors')
     manual=request(office,'PUT',f'/projects/{pid}/manual',json={'revision':manual['revision'],'chapters':[{'id':'ch1','title':'测试章节','body':'实际操作说明与结果','verified':True}]}).json()
@@ -385,6 +691,11 @@ try:
     material_path = f'/projects/{pid}/application-materials'
     precheck_path = f'/projects/{pid}/application-precheck'
     start_path = f'/projects/{pid}/application-preview/start'
+    official_path = f'/projects/{pid}/official-application'
+    request(office, 'POST', official_path+'/start', expected=409)
+    request(research, 'POST', official_path+'/start', expected=403)
+    for method in ('GET', 'PUT'):
+        request(office, method, '/admin/official-credentials', expected=403, json={})
     request(office, 'POST', start_path, expected=409)
     request(research, 'POST', start_path, expected=403, headers={'X-Role': 'admin'})
     request(research, 'POST', material_path+'/source/submit', expected=422, json={'attachmentId': zipped['id']})
@@ -398,6 +709,7 @@ try:
                'material submission sends an administrator notification')
         body = {'reviewId': submission['reviewId'], 'status': 'approved'}
         request(research, 'POST', review_path, expected=403, json=body)
+        request(admin, 'POST', review_path, expected=400, json={**body,'status':'returned','comment':' '})
         request(admin, 'POST', review_path, json={**body,'status':'returned','comment':'请重新核对'})
         expect(any(n['projectId']==pid and n['kind']==kind and n['status']=='returned'
                    for n in request(research,'GET','/notifications').json()), 'returned material notifies project contributors')
@@ -405,15 +717,24 @@ try:
         request(admin, 'POST', review_path, expected=409, json=body)
         request(admin, 'POST', review_path, json={**body,'reviewId':retry['reviewId']})
     request(office, 'POST', start_path, expected=409)
-    request(office, 'POST', f'/projects/{pid}/form/submit')
-    request(admin, 'POST', f'/projects/{pid}/form/review', json={'field':'all','status':'approved'})
+    p = request(office, 'POST', f'/projects/{pid}/form/submit').json()
+    request(admin, 'POST', form_review, json={'revision': p['revision'], 'status': 'approved'})
     expect(all(check['status']=='approved' for check in request(office,'GET',precheck_path).json()['checks']),
            'the live precheck verifies all four approvals')
     expect(request(office,'POST',start_path).json()=={'mode':'preview'}, 'approved materials start the preview')
+    ticket = request(office,'POST',official_path+'/start').json()
+    request(admin,'POST',official_path+'/consume',expected=409,json=ticket)
+    launch = request(office,'POST',official_path+'/consume',json=ticket)
+    expect('no-store' in launch.headers.get('Cache-Control', '') and
+           launch.json()['form']['fullName'] == values['fullName'] and launch.json()['login'] == {},
+           'one-time launch uses approved data and only administrators may use shared credentials')
+    request(office,'POST',official_path+'/consume',expected=409,json=ticket)
     verify_application_ui(office, admin, pid)
+    ticket = request(office,'POST',official_path+'/start').json()
     replacement = request(office, 'POST', f'/projects/{pid}/files',
                           files={'file': (filename, content+b' v2', 'text/plain')}, data={'category': category}).json()
     request(office, 'POST', start_path, expected=409)
+    request(office, 'POST', official_path+'/consume', expected=409, json=ticket)
     request(office, 'DELETE', f"/projects/{pid}/files/{replacement['id']}")
     request(office, 'POST', start_path, expected=409)
     expect(not request(office,'GET',f'/projects/{pid}').json()['records'], 'preview creates no official submission record')
@@ -483,19 +804,45 @@ try:
     request(research, 'GET', job_path, expected=404)
     expect(request(research, 'GET', jobs).json()['job'] is None, 'manual jobs are scoped to project and owner')
     planned = await_job(office, job_path, 'review')
-    expect(planned['result']['sourceSelection'] == {'candidates': 3, 'paths': [
-        '项目样例/index.html','项目样例/backend/ProjectController.java']},
-        'folder paths are preserved and only selected frontend and backend files are read')
+    selection = planned['result']['sourceSelection']
+    expect(selection['candidates'] == 3
+           and selection['groups']['frontend']['readPaths'] == ['项目样例/index.html']
+           and selection['groups']['backend']['readPaths'] == ['项目样例/backend/ProjectController.java'],
+           'folder paths are preserved and frontend and backend files are analyzed separately')
     request(office, 'GET', job_path + '/word', expected=404)
     plan = request(office, 'GET', job_path + '/plan').json()
-    expect(len(plan['shots']) == 3 and 'captured' not in planned['result'], 'plan covers pages and modal without capturing before confirmation')
+    expect(len(plan['shots']) == 6 and 'captured' not in planned['result'], 'the plan covers all candidate targets before confirmation')
+    expect(plan['skipped'] == planned['result']['skippedShots']
+           and plan['skipped'][0]['operationId'] == 'log-detail'
+           and any(o['id'] == 'log-detail' and not o['capture'] for o in planned['result']['operations']),
+           'missing data excludes an operation from screenshots without removing it from the manual')
+    expect(any('后端源码分析」将改用非流式请求' in event['text'] for event in planned['events']),
+           'a stream connection loss switches formats without restarting source analysis')
     request(admin,'PUT',settings,json={'url':''})
     request(office, 'POST', job_path + '/capture', expected=409)
     request(admin,'PUT',settings,json={'url':job_body['url']})
+    force_vision_rejection.set()
+    try:
+        request(office, 'POST', job_path + '/capture')
+        rejected = await_job(office, job_path, 'failed')
+    finally:
+        force_vision_rejection.clear()
+    expect('没有截图通过核验' in rejected['error'] and not rejected['result'].get('captured')
+           and any('复核仍未通过' in shot['reason'] for shot in rejected['result']['failedShots']),
+           'all failed screenshots are recorded and no document is generated without any approved image')
+    request(office, 'GET', job_path + '/word', expected=404)
+    vision_start = len(seen)
     request(office, 'POST', job_path + '/capture')
     finished = await_job(office, job_path, 'complete')
     expect(finished['result']['captured'] == 3 and {e['stage'] for e in finished['events']} == set(range(6)),
            'all six stages report progress and real browser screenshots')
+    skipped = finished['result']['unreachableShots']
+    expect([(s['title'], s['operationId']) for s in skipped] == [('服务异常页', None), ('异常详情', 'error-detail')]
+           and '验收文字' in skipped[0]['reason'] and '所属页面无法到达' in skipped[1]['reason'],
+           'an unreachable page and its dependent operation are skipped without interrupting reachable targets')
+    expect([(s['operationId'], '复核仍未通过' in s['reason']) for s in finished['result']['failedShots']]
+           == [('rejected-detail', True)],
+           'a shot that fails every review is logged and does not block exporting the approved shots')
     expect(all(payload['model'] == cfg['model'] and payload['reasoning_effort'] == cfg['reasoning_effort']
                for _, payload in seen[start_index:]), 'manual model calls use the configured assistant model and effort')
     word = request(office, 'GET', job_path + '/word')
@@ -503,9 +850,56 @@ try:
     doc = Document(io.BytesIO(word.content))
     expect(len(doc.inline_shapes) == 3 and len(doc.sections) == 2 and '版本详情' in '\n'.join(p.text for p in doc.paragraphs),
            'downloaded Word preserves template sections and embeds each real JPEG')
+    expect(all('服务异常页' not in p.text and '异常界面' not in p.text for p in doc.paragraphs),
+           'the generated manual omits unreachable pages and their empty sections')
+    reviews = [payload['messages'][-1]['content'] for _, payload in seen[vision_start:]
+               if payload['messages'][0]['content'].startswith('操作手册任务：截图核验。')]
+    requests = [json.loads(parts[0]['text']) for parts in reviews]
+    expect([(item['target'], item['attempt'], item['viewport']) for item in requests] ==
+           [('项目首页', 1, 'default'), ('资料管理', 1, 'default'), ('查看版本详情', 1, 'default'),
+            ('查看版本详情', 2, 'wide'), ('版本详情补充视图', 1, 'default'),
+            ('版本详情补充视图', 2, 'wide'), ('版本详情补充视图', 3, 'focus')],
+           'rejected screenshots get bounded retakes and subsequent approved screenshots are retained')
+    rejected_image, approved_image = [base64.b64decode(parts[1]['image_url']['url'].split(',', 1)[1])
+                                      for parts in reviews[2:4]]
+    with zipfile.ZipFile(io.BytesIO(word.content)) as archive:
+        media = [archive.read(name) for name in archive.namelist() if name.startswith('word/media/')]
+    expect(approved_image in media and rejected_image not in media and approved_image != rejected_image,
+           'Word embeds the approved retake and does not embed the rejected image')
     if filename := os.getenv('TEST_MANUAL_WORD'):
         Path(filename).write_bytes(word.content)
     verify_workspace_ui(office, pid)
+    request(research, 'POST', jobs + '/reset')
+    expect(request(office, 'GET', jobs).json()['job']['id'] == job['id'],
+           'reset only affects the current account and project')
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(**chrome_executable())
+        try:
+            page = project_page(browser, office, pid, 'source')
+            page.get_by_role('link', name='下载 Word 手册').wait_for()
+            with page.expect_response(lambda response: response.url.endswith('/manual-jobs/reset')
+                                      and response.request.method == 'POST') as response:
+                page.get_by_role('button', name='重置状态').click()
+            assert response.value.ok, response.value.text()
+            page.get_by_text('暂无解析任务', exact=True).wait_for()
+            page.reload()
+            page.get_by_text('暂无解析任务', exact=True).wait_for()
+            expect(page.get_by_role('link', name='下载 Word 手册').count() == 0,
+                   'reset clears the manual workspace after reload')
+        finally:
+            browser.close()
+    expect(request(office, 'GET', job_path + '/word').content == word.content
+           and request(office, 'GET', settings).json()['url'] == job_body['url'],
+           'reset preserves completed files and the saved capture entry')
+    attachments = request(office, 'GET', f'/projects/{pid}').json()['files']
+    archive_id = next(f['id'] for f in attachments if f['name'] == '项目样例.zip')
+    active_job = request(office, 'POST', jobs + '/source', json={'fileId': archive_id}).json()
+    request(office, 'POST', jobs + '/reset')
+    active_path = jobs + '/' + active_job['id']
+    expect(request(office, 'GET', active_path).json()['status'] == 'cancelled'
+           and request(office, 'GET', jobs).json()['job'] is None,
+           'reset stops an active task and does not revive older jobs')
     p = request(admin, "GET", f"/projects/{pid}").json()
     request(admin, "PUT", f"/projects/{pid}", json={**p, "allowedRoles": ["adminDept"]})
     request(research, "GET", f"/projects/{pid}", expected=403)
@@ -538,9 +932,34 @@ try:
     draft=request(office,'GET',f"/projects/{target['id']}").json()
     expect(draft['form']['shortName']=='来自跨项目附件的简称'
            and 'shortName' in draft['assistantReferenceFields'],'agent reads archived ZIP entry, fills draft and marks the field')
+    turn = request(office,'GET','/assistant/messages',params={'projectId':target['id']}).json()[-1]
+    write = next(event for event in turn['operations'] if event['action']=='fill_form')
+    expect(write['projectId']==target['id'] and write['changes']==[
+        {'field':'shortName','label':'软件简称','before':'','after':'来自跨项目附件的简称'}],
+        'assistant persists the actual project and exact before/after values')
+    expect(any(event['action']=='read_attachment' and event['sourceProject']!=write['projectName']
+               for event in turn['operations']), 'the source project is separate from the write target')
+    noop = request(office,'POST','/assistant/chat',json={**fill,'question':'帮我把软件简称改成来自跨项目附件的简称'}).json()
+    expect(not noop['changed'] and noop['operations'][-1]['changes']==[], 'no-op fill records no field modification')
     edited=request(office,'PUT',f"/projects/{target['id']}/form",
                    json={'revision':draft['revision'],'fields':{'shortName':'人工修订简称'}}).json()
     expect('shortName' not in edited['assistantReferenceFields'],'manual edit clears the reference marker')
+    recall = {'projectId':target['id'],'page':'basic','question':'刚才具体修改了什么？'}
+    memory = request(office,'POST','/assistant/chat',json=recall).json()
+    expect('来自跨项目附件的简称' in memory['answer'], 'follow-up remembers the saved value after a later manual edit')
+    expect('没有已保存的修改' in request(admin,'POST','/assistant/chat',json=recall).json()['answer'],
+           'assistant memory is isolated by account')
+    expect('没有已保存的修改' in request(office,'POST','/assistant/chat',json={**recall,'scope':'project'}).json()['answer'],
+           'assistant memory is isolated by conversation scope')
+    request(office,'POST','/assistant/chat',json={**recall,'question':'哪个软著的附件提到了 PrivateEvidence？'})
+    follow = request(office,'POST','/assistant/chat',json={**recall,'question':'刚才那个项目的版本呢？'}).json()
+    expect(follow['operations'][-1]['projectId']==pid, 'project follow-up uses the previously located target')
+    blocked = request(office,'POST','/assistant/chat',json={**recall,'question':'帮我把刚才查的项目的软件简称改成测试'}).json()
+    expect('请切换' in blocked['answer'] and not blocked.get('changed'),
+           'a remembered project cannot redirect a write to a different current page')
+    request(office,'DELETE','/assistant/messages',params={'projectId':target['id']})
+    expect('没有已保存的修改' in request(office,'POST','/assistant/chat',json=recall).json()['answer'],
+           'cleared turns are excluded from subsequent memory')
     request(research,'POST','/assistant/chat',expected=403,json={
         'projectId':target['id'],'page':'basic','question':'帮我填写著作权人'})
     request(office,'POST',f"/projects/{target['id']}/files",

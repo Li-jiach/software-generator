@@ -52,14 +52,19 @@ class ProjectService {
         for(var r:db.queryForList("SELECT field_key,field_value FROM project_fields WHERE project_id=?",id))f.put(String.valueOf(r.get("field_key")),String.valueOf(r.get("field_value")));
         return f;
     }
-    Map<String,Object> reviews(String id,Map<String,String> f) {
+    Map<String,Object> reviews(String id,Map<String,String> f,Object formVersion) {
         var result=new LinkedHashMap<String,Object>();
-        var rs=db.queryForList("SELECT r.field_key,r.field_value_hash,r.status,r.comment,r.created_at AS time,u.display_name AS reviewer FROM field_reviews r JOIN users u ON u.id=r.reviewer_id WHERE r.project_id=? AND r.id IN (SELECT MAX(id) FROM field_reviews WHERE project_id=? GROUP BY field_key)",id,id);
-        for(var r:rs)if(AuthService.hash(f.getOrDefault(String.valueOf(r.get("field_key")),"")).equals(r.get("field_value_hash")))result.put(String.valueOf(r.get("field_key")),r);
+        var rs=db.queryForList("SELECT r.field_key,r.field_value_hash,r.form_version,r.status,r.comment,r.created_at AS time,u.display_name AS reviewer FROM field_reviews r JOIN users u ON u.id=r.reviewer_id WHERE r.project_id=? AND r.id IN (SELECT MAX(id) FROM field_reviews WHERE project_id=? GROUP BY field_key)",id,id);
+        for (var row : rs) {
+            String key = String.valueOf(row.get("field_key"));
+            if ("all".equals(key) && !Objects.equals(formVersion, row.get("form_version"))) continue;
+            String value = "all".equals(key) ? encode(new TreeMap<>(f)) : f.getOrDefault(key, "");
+            if (AuthService.hash(value).equals(row.get("field_value_hash"))) result.put(key, row);
+        }
         return result;
     }
     Map<String,Object> detail(String id,Map<String,Object> u) {
-        var p=raw(id,u,false);var m=summary(p);var f=form(id);m.put("form",f);m.put("formReviews",reviews(id,f));
+        var p=raw(id,u,false);var m=summary(p);var f=form(id);m.put("form",f);m.put("formReviews",reviews(id,f,p.get("form_version")));
         m.put("files",files(id));
         m.put("applicationMaterials", APPLICATION_MATERIALS.stream().map(kind -> {
             var material = materialReview(id, kind);
@@ -164,6 +169,7 @@ class ProjectService {
         if("submitted".equals(p.get("form_status")))throw new ApiException(409,"表单审核中，请等待审核或退回");
         if(!(body.get("fields") instanceof Map<?,?> values))throw new ApiException(400,"缺少填报字段");
         var existing=form(id);var changed=new ArrayList<String>();
+        var assistantChanges=new ArrayList<Map<String,String>>();
         for(var entry:values.entrySet()) {
             String key=String.valueOf(entry.getKey());var field=fields.stream().filter(x->key.equals(x.get("id"))).findFirst().orElseThrow(()->new ApiException(400,"未知填报字段"));
             String value=entry.getValue()==null?"":String.valueOf(entry.getValue()).trim();
@@ -176,6 +182,8 @@ class ProjectService {
                 for(var error:errors)if(key.equals(error.get("field"))&&!value.isBlank())
                     throw new ApiException(422,error.get("message"));
             }
+            if(assistant)assistantChanges.add(Map.of("field",key,"label",String.valueOf(field.get("label")),
+                "before",existing.getOrDefault(key,""),"after",value));
             putField(id,key,value,u);
             if(assistant&&!value.isBlank())db.update("INSERT IGNORE INTO assistant_reference_fields(project_id,field_key) VALUES(?,?)",id,key);
             else clearAssistantReference(id,key);
@@ -186,7 +194,9 @@ class ProjectService {
             db.update("UPDATE projects SET name=?,version=?,form_status='draft',form_version=form_version+1,revision=revision+1 WHERE id=?",f.getOrDefault("fullName", "").isBlank()?p.get("name"):f.get("fullName"),f.getOrDefault("version", "").isBlank()?p.get("version"):f.get("version"),id);
             log(id,u,assistant?"助手代填草稿":"保存填报草稿",String.join("、",changed));
         }
-        return detail(id,u);
+        var saved=detail(id,u);
+        if(assistant)saved.put("assistantChanges",assistantChanges);
+        return saved;
     }
     List<Map<String,String>> validate(Map<String,String> f) {
         var errors=new ArrayList<Map<String,String>>();
@@ -213,7 +223,10 @@ class ProjectService {
         if (!"approved".equals(status)) return status;
         String id = String.valueOf(project.get("id"));
         var values = form(id);
-        return allFieldsApproved(values, reviews(id, values)) ? "approved" : "submitted";
+        var currentReviews = reviews(id, values, project.get("form_version"));
+        if (currentReviews.get("all") instanceof Map<?,?> review)
+            return "approved".equals(review.get("status")) ? "approved" : "submitted";
+        return allFieldsApproved(values, currentReviews) ? "approved" : "submitted";
     }
 
     private boolean allFieldsApproved(Map<String,String> values, Map<String,Object> reviews) {
@@ -223,24 +236,28 @@ class ProjectService {
     }
 
     @Transactional Map<String,Object> review(String id,Map<String,Object> body,Map<String,Object> u) {
-        var p=raw(id,u,true);auth.requireAdmin(u);
-        String previousStatus = formStatus(p);
-        if(!Set.of("submitted","returned").contains(previousStatus))throw new ApiException(409,"请先提交表单审核");
-        String status=text(body,"status"),key=text(body,"field"),comment=text(body,"comment");
-        if(!Set.of("approved","returned").contains(status))throw new ApiException(400,"审核状态不合法");
-        if(status.equals("returned")&&comment.isEmpty())throw new ApiException(400,"退回时必须填写原因");
-        var f=form(id);
-        var selected=fields.stream().filter(x->key.equals("all")||key.equals(x.get("id"))).toList();
-        if(selected.isEmpty())throw new ApiException(400,"未知字段");
-        if(key.equals("all")&&status.equals("approved")&&!validate(f).isEmpty())throw new ApiException(422,"仍有未通过的填报校验项");
-        for(var field:selected) {
-            String fieldId=String.valueOf(field.get("id")),value=f.getOrDefault(fieldId,"");
-            if(status.equals("approved")&&value.isBlank()) {if(key.equals("all")&&!field.containsKey("required"))continue;throw new ApiException(422,"空字段不能审核通过");}
-            db.update("INSERT INTO field_reviews(project_id,field_key,field_value_hash,form_version,status,comment,reviewer_id) VALUES(?,?,?,?,?,?,?)",id,fieldId,AuthService.hash(value),p.get("form_version"),status,comment,u.get("id"));
-        }
-        var reviews=reviews(id,f);
-        boolean all=allFieldsApproved(f,reviews);
-        String state=status.equals("returned")?"returned":all?"approved":previousStatus;
-        db.update("UPDATE projects SET form_status=?,revision=revision+1 WHERE id=?",state,id);log(id,u,status.equals("returned")?"退回填报字段":"核实填报字段",key+" "+comment);return detail(id,u);
+        auth.requireAdmin(u);
+        var project = raw(id, u, true);
+        checkRevision(project, body.get("revision"));
+        if (!"submitted".equals(formStatus(project))) throw new ApiException(409, "请先提交表单审核");
+
+        String status = text(body, "status");
+        String field = text(body, "field");
+        String comment = text(body, "comment");
+        if (!field.isEmpty() && !"all".equals(field)) throw new ApiException(400, "基础信息须整表审核");
+        if (!Set.of("approved", "returned").contains(status) || comment.length() > 5000 ||
+            ("returned".equals(status) && comment.isBlank()))
+            throw new ApiException(400, "请选择审核结果，不通过时须填写原因");
+
+        var values = form(id);
+        if ("approved".equals(status) && !validate(values).isEmpty())
+            throw new ApiException(422, "仍有未通过的填报校验项");
+        db.update("""
+            INSERT INTO field_reviews(project_id,field_key,field_value_hash,form_version,status,comment,reviewer_id)
+            VALUES(?,'all',?,?,?,?,?)
+            """, id, AuthService.hash(encode(new TreeMap<>(values))), project.get("form_version"), status, comment, u.get("id"));
+        db.update("UPDATE projects SET form_status=?,revision=revision+1 WHERE id=?", status, id);
+        log(id, u, "returned".equals(status) ? "退回基础信息审核" : "通过基础信息审核", comment);
+        return detail(id,u);
     }
 }

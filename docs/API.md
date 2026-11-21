@@ -11,7 +11,10 @@
 | PUT `/projects/{id}/form` | 保存分部门字段，携带revision |
 | POST `/projects/{id}/form/validate` | 检查已保存表单 |
 | POST `/projects/{id}/form/submit` | 校验并提交审核，可携带已保存草稿的 revision |
-| POST `/projects/{id}/form/review` | 管理员审核，field可为字段名或all |
+| POST `/projects/{id}/form/review` | 管理员整表审核，提交 revision 与 status（approved 或 returned），returned 必须填写 comment |
+| POST `/projects/{id}/official-application/start` | 管理员或行政业务办经四项预检取得一次性启动凭证 |
+| POST `/projects/{id}/official-application/consume` | 同一工作台会话以 ticket 领取当前审核表单，服务端再次校验审核状态；系统管理员可领取机构登录配置 |
+| GET / PUT `/admin/official-credentials` | 系统管理员读取已配置账号，或提交 username 和 password 更新加密配置 |
 | POST `/projects/{id}/files` | multipart附件上传，file及category |
 | GET `/projects/{id}/files/{fileId}/download` | 原件下载，安全类型支持inline=true预览 |
 | GET `/projects/{id}/files/{fileId}/text` | 已提取文本 |
@@ -21,11 +24,14 @@
 | GET `/projects/{id}/reuse/{sourceId}` | 读取已授权历史填报字段 |
 | GET `/notifications` | 管理员查看待核实项，其他用户查看可访问项目的待修改项 |
 | GET/POST `/projects/{id}/manual-jobs` | 获取本账号在本项目的最近一次任务；以 `fileId`、`url`、`browserReady` 创建任务 |
-| GET/DELETE `/projects/{id}/manual-jobs/{job}` | 查询进度、结果和状态；停止活跃任务 |
-| POST `/projects/{id}/manual-jobs/{job}/capture` | 确认计划，开始真实浏览器截图 |
-| GET `/projects/{id}/manual-jobs/{job}/plan`、GET `/projects/{id}/manual-jobs/{job}/word` | 下载截图计划 JSON 或生成完成的 Word |
-| GET/DELETE `/assistant/messages` | 按projectId、scope查询或清空自己的会话 |
-| POST `/assistant/chat` | question、projectId、scope；scope为knowledge/project/history |
+| POST `/projects/{id}/manual-jobs/source` | 以 `fileId` 启动目录分类和前后端源码分析，完成后状态为 `source_ready` |
+| POST `/projects/{id}/manual-jobs/reset` | 停止当前账号在本项目的生成任务，并清空页面显示的任务状态 |
+| POST `/projects/{id}/manual-jobs/{job}/generate` | 以 `url`、`browserReady` 继续已完成的源码分析任务并生成截图计划 |
+| GET/DELETE `/projects/{id}/manual-jobs/{job}` | 查询进度、分析结果和最近的模型回复 `modelLogs`；停止活跃任务 |
+| POST `/projects/{id}/manual-jobs/{job}/capture` | 确认计划并开始截图。通过模型核验的图片计入完成数。不可达目标记入 `unreachableShots`，截图或核验失败记入 `failedShots`，其余目标继续执行。截图阶段失败后可重试 |
+| GET `/projects/{id}/manual-jobs/{job}/plan`、GET `/projects/{id}/manual-jobs/{job}/word` | 下载截图计划 JSON 或生成完成的 Word。计划包含可执行的 `shots` 和注明原因的 `skipped` |
+| GET/DELETE `/assistant/messages` | 按 projectId、scope 查询或清空自己的会话。助手消息的 operations 含实际操作、目标项目和已保存的字段变更 |
+| POST `/assistant/chat`、POST `/assistant/chat/stream` | question、projectId、scope、page、hasUnsaved。scope 可为 knowledge、project 或 history。完成响应包含 operations |
 | GET/PUT `/assistant/config` | 管理员读取或更新模型配置，Key只写 |
 | POST `/assistant/config/test` | 管理员测试模型连接 |
 | GET/POST `/assistant/knowledge` | 知识资料查询、管理员新增 |

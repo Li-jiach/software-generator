@@ -10,22 +10,23 @@ import ManagementPage from './components/ManagementPage.vue'
 import AssistantWidget from './components/AssistantWidget.vue'
 import ManualPage from './components/ManualPage.vue'
 import ApplicationPage from './components/ApplicationPage.vue'
+import OfficialAccountPage from './components/OfficialAccountPage.vue'
 const user=ref(null),projects=ref([]),project=ref(null),currentId=ref(localStorage.getItem('copyright-current-project')||''),route=ref('overview'),loading=ref(true),mobile=ref(false),dirty=ref(false),toasts=ref([]),modal=ref(''),projectEditing=ref(null),busy=ref(false),notifications=ref([])
 const login=reactive({username:'admin',password:''}),loginError=ref('')
 const projectForm=reactive({name:'',version:'V1.0',dept:'研发中心',owner:'',description:'',allowedRoles:['adminDept','research']})
 const nav=[{name:'软著项目管理',icon:Layers,items:[['overview','软著查阅',FolderOpen],['attachments','附件资料',FolderOpen],['records','申报记录',Receipt]]},{name:'材料智能生成',icon:Sparkles,items:[['basic','基础信息填报',FileCheck2],['source','操作手册生成',BookOpen],['rpa','官网自动申报',Globe]]}]
-nav.push({name:'管理页面',icon:ShieldCheck,items:[['users','人员管理',Menu],['reviews','审核管理',ShieldCheck]]})
+nav.push({name:'管理页面',icon:ShieldCheck,items:[['users','人员管理',Menu],['reviews','审核管理',ShieldCheck],['official-account','官网账号',Globe]]})
 const visibleNav=computed(()=>nav.filter(n=>n.name!=='管理页面'||user.value?.role==='admin'))
 const expanded=ref(nav.map(n=>n.name))
 const reviewTarget=ref(null),manualEntry=ref('source')
-const titles={users:'人员管理',reviews:'审核管理',overview:'软著查阅',records:'申报记录',basic:'基础信息填报',attachments:'附件资料',source:'操作手册生成',rpa:'官网自动申报'}
+const titles={users:'人员管理',reviews:'审核管理','official-account':'官网账号',overview:'软著查阅',records:'申报记录',basic:'基础信息填报',attachments:'附件资料',source:'操作手册生成',rpa:'官网自动申报'}
 const parent=computed(()=>nav.find(n=>n.items.some(i=>i[0]===route.value))?.name||'软著项目管理')
 function notify(text,error=false){const id=Date.now()+Math.random();toasts.value.push({id,text,error});setTimeout(()=>toasts.value=toasts.value.filter(t=>t.id!==id),5000)}
 function safeLeave(){return !dirty.value||window.confirm('当前填报尚未保存，确认离开？')}
-function canNavigate(to){return Object.hasOwn(titles,to)&&(!['users','reviews'].includes(to)||user.value?.role==='admin')}
+function canNavigate(to){return Object.hasOwn(titles,to)&&(!['users','reviews','official-account'].includes(to)||user.value?.role==='admin')}
 function navigate(to){if(!canNavigate(to)||!safeLeave())return false;dirty.value=false;route.value=to;location.hash=to;mobile.value=false;window.scrollTo(0,0);return true}
 async function selectProject(id,to){if(!safeLeave())return;try{const p=await api('/projects/'+encodeURIComponent(id));project.value=p;currentId.value=id;localStorage.setItem('copyright-current-project',id);dirty.value=false;if(to)navigate(to)}catch(e){notify(e.message,true)}}
-async function refresh(){try{projects.value=await api('/projects');const selected=projects.value.find(p=>p.id===currentId.value)||projects.value[0];if(selected){currentId.value=selected.id;project.value=await api('/projects/'+selected.id);localStorage.setItem('copyright-current-project',selected.id)}else{project.value=null;currentId.value='';if(!['users','reviews'].includes(route.value))route.value='overview'}}catch(e){notify(e.message,true)}}
+async function refresh(){try{projects.value=await api('/projects');const selected=projects.value.find(p=>p.id===currentId.value)||projects.value[0];if(selected){currentId.value=selected.id;project.value=await api('/projects/'+selected.id);localStorage.setItem('copyright-current-project',selected.id)}else{project.value=null;currentId.value='';if(!['users','reviews','official-account'].includes(route.value))route.value='overview'}}catch(e){notify(e.message,true)}}
 async function signIn(){busy.value=true;loginError.value='';try{await api('/auth/login',{method:'POST',body:login});login.password='';user.value=await api('/auth/me');await refresh()}catch(e){loginError.value=e.message}finally{busy.value=false}}
 async function logout(){if(!safeLeave())return;try{await api('/auth/logout',{method:'POST'})}catch{}user.value=null;project.value=null;projects.value=[];dirty.value=false}
 function editProject(p=null){projectEditing.value=p;Object.assign(projectForm,{name:p?.name||'',version:p?.version||'V1.0',dept:p?.dept||user.value.department,owner:p?.owner||user.value.displayName,description:p?.description||'',allowedRoles:p?.allowedRoles||['adminDept','research']});modal.value='project'}
@@ -79,6 +80,7 @@ onMounted(async()=>{try{user.value=await api('/auth/me');await refresh()}catch{}
  <main class="page fade">
   <ProjectsPage v-if="route==='overview'" :projects="projects" :user="user" @create="editProject()" @edit="editProject" @archive="archive" @open="selectProject"/>
   <ManagementPage v-else-if="['users','reviews'].includes(route)&&user.role==='admin'" :key="route" :section="route" :user="user" :target="reviewTarget" @notify="notify" @refresh="receiveRefresh"/>
+  <OfficialAccountPage v-else-if="route==='official-account'&&user.role==='admin'" @notify="notify"/>
   <template v-else-if="project">
    <FormPage ref="formPage" v-if="route==='basic'" :key="project.id" :project="project" :user="user" :projects="projects" @dirty="dirty=$event" @refresh="receiveRefresh" @notify="notify"/>
    <AttachmentsPage v-else-if="route==='attachments'" :key="project.id" :project="project" @refresh="receiveRefresh" @notify="notify"/>

@@ -12,8 +12,21 @@ import com.fasterxml.jackson.core.type.TypeReference;
 class ManagementController {
     final AuthService auth;
     final ProjectService projects;
-    ManagementController(AuthService auth,ProjectService projects){this.auth=auth;this.projects=projects;}
+    final OfficialCredentials credentials;
+    ManagementController(AuthService auth,ProjectService projects,OfficialCredentials credentials){
+        this.auth=auth;this.projects=projects;this.credentials=credentials;
+    }
     Map<String,Object> admin(HttpServletRequest req){var u=auth.current(req);auth.requireAdmin(u);return u;}
+    @GetMapping("/admin/official-credentials") Object officialAccount(HttpServletRequest req) {
+        admin(req);
+        var login = credentials.read();
+        return Map.of("username", login.getOrDefault("username", ""), "configured", !login.isEmpty());
+    }
+    @PutMapping("/admin/official-credentials") Object saveOfficialAccount(@RequestBody Map<String,Object> body,HttpServletRequest req) {
+        admin(req);
+        credentials.save(body);
+        return Map.of("ok", true);
+    }
     @GetMapping("/admin/users") Object users(HttpServletRequest req){
         admin(req);return projects.db().queryForList("SELECT id,username,display_name AS displayName,role,department,enabled FROM users ORDER BY created_at");
     }

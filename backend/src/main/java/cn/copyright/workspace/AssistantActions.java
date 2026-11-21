@@ -2,6 +2,7 @@ package cn.copyright.workspace;
 
 import java.util.*;
 import java.util.function.BiConsumer;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -15,7 +16,7 @@ class AssistantActions {
         var rows=projects.db().queryForList("SELECT a.*,p.name AS project_name FROM attachments a JOIN projects p ON p.id=a.project_id WHERE a.id=? AND a.deleted=FALSE",id);
         if(rows.isEmpty())throw new ApiException(404,"附件不存在");return rows.get(0);
     }
-    Object search(Map<?,?> args,String currentId){
+    List<Map<String,Object>> search(Map<?,?> args,String currentId){
         String q=ProjectService.text(args,"query");int offset=offset(args);
         if(q.length()>200)throw new ApiException(400,"附件检索词过长");
         String term=likeTerm(q);
@@ -108,10 +109,13 @@ class AssistantActions {
             "include_knowledge",false,"project_context",info.substring(0,Math.min(12000,info.length())));
     }
 
-    record Result(Map<String,Object> response,String query) {}
-    Result run(String id,String question,String page,String scope,Map<String,Object> user,List<Map<String,Object>> history,boolean hasUnsaved,
-               BiConsumer<String,Map<String,Object>> events){
+    record Result(Map<String,Object> response,String query,Supplier<Map<String,Object>> mutation) {
+        Result(Map<String,Object> response,String query){this(response,query,null);}
+    }
+    Result run(String id,String question,String page,String scope,Map<String,Object> user,List<Map<String,Object>> history,List<Map<String,Object>> memory,boolean hasUnsaved,
+               List<Map<String,Object>> operations,BiConsumer<String,Map<String,Object>> events){
         var context=new LinkedHashMap<String,Object>();context.put("page",page);context.put("projectId",id);context.put("scope",scope);
+        context.put("recentOperations",memory);
         context.put("fields",projects.fields().stream().filter(f->"admin".equals(user.get("role"))||user.get("role").equals(f.get("dept"))).toList());
         Integer revision=null;
         if(!id.isBlank()){
@@ -119,13 +123,19 @@ class AssistantActions {
             revision=((Number)p.get("revision")).intValue();
             context.put("form",projects.form(id));
             context.put("name",p.get("name"));
+            context.put("version",p.get("version"));
+            context.put("recentProjectActivity",projects.db().queryForList("""
+                SELECT a.title,LEFT(a.detail,300) AS detail,a.created_at AS time,u.display_name AS actor
+                FROM activity_logs a JOIN users u ON u.id=a.actor_id
+                WHERE a.project_id=? ORDER BY a.id DESC LIMIT 8
+                """,id));
             context.put("recentAttachments",projects.db().queryForList("""
                 SELECT id,name,category,version,extraction_warning AS warning
                 FROM attachments WHERE project_id=? AND deleted=FALSE ORDER BY created_at DESC,version DESC LIMIT 12
                 """,id));
         }
         var observations=new ArrayList<Map<String,Object>>();var sources=new ArrayList<Map<String,Object>>();
-        var candidates=new HashSet<String>();
+        var candidates=new HashMap<String,Map<String,Object>>();
         var reads=new HashSet<List<Object>>();
         for(int step=0;step<8;step++){
             context.put("remainingLookupSteps",7-step);
@@ -140,11 +150,11 @@ class AssistantActions {
                     continue;
                 }
             }
-            boolean tracked=events!=null&&Set.of("search_projects","project_rag","status","fill_form","search_attachments","read_attachment").contains(action);
+            boolean tracked=events!=null&&Set.of("search_projects","project_rag","status","search_attachments","read_attachment").contains(action);
             if(tracked)events.accept("tool",Map.of("name",action,"state","running"));
             boolean success=false;
             try {
-                var result=executePlan(action,id,page,args,question,user,history,hasUnsaved,revision,observations,sources,candidates,events,plan);
+                var result=executePlan(action,id,page,args,question,user,history,hasUnsaved,revision,observations,sources,candidates,operations,events,plan);
                 success=true;
                 if(result!=null)return result;
             } finally {
@@ -158,17 +168,24 @@ class AssistantActions {
     private Result executePlan(String action,String id,String page,Map<?,?> args,String question,
                                Map<String,Object> user,List<Map<String,Object>> history,boolean hasUnsaved,Integer revision,
                                List<Map<String,Object>> observations,List<Map<String,Object>> sources,
-                               Set<String> candidates,BiConsumer<String,Map<String,Object>> events,Map<String,Object> plan){
+                               Map<String,Map<String,Object>> candidates,List<Map<String,Object>> operations,BiConsumer<String,Map<String,Object>> events,Map<String,Object> plan){
         switch(action){
-                case "knowledge":return new Result(null,ProjectService.required(args,"query",500));
+                case "knowledge":
+                    String query=ProjectService.required(args,"query",500);
+                    operations.add(Map.of("action",action,"query",query));
+                    return new Result(null,query);
                 case "search_projects":
                     var matches=searchProjects(args,id,user);
-                    for(var match:matches)candidates.add(String.valueOf(match.get("id")));
+                    for(var match:matches)candidates.put(String.valueOf(match.get("id")),match);
+                    operations.add(Map.of("action",action,"query",ProjectService.text(args,"query"),"count",matches.size()));
                     observations.add(Map.of("action",action,"result",matches));break;
                 case "project_rag":
                     String selected=ProjectService.required(args,"projectId",40);
-                    if(!candidates.contains(selected))throw new ApiException(422,"请先定位要检索的软著项目");
-                    return new Result(ai.answer(projectRag(selected,ProjectService.required(args,"query",500),question,user,history),events),null);
+                    if(!candidates.containsKey(selected))throw new ApiException(422,"请先定位要检索的软著项目");
+                    var match=candidates.get(selected);
+                    var answer=ai.answer(projectRag(selected,ProjectService.required(args,"query",500),question,user,history),events);
+                    operations.add(Map.of("action",action,"projectId",selected,"projectName",match.get("name"),"version",match.get("version")));
+                    return new Result(answer,null);
                 case "status":
                     if(id.isBlank())return result("请先选择要查询的项目。",sources);
                     var detail=projects.detail(id,user);
@@ -185,6 +202,7 @@ class AssistantActions {
                         statusText.append(record.get("status")).append(" · ").append(record.get("occurredAt"));
                         if(!ProjectService.text(record,"referenceNo").isBlank())statusText.append(" · ").append(record.get("referenceNo"));
                     }
+                    operations.add(Map.of("action",action,"projectId",id,"projectName",detail.get("name"),"version",detail.get("version")));
                     return result(statusText.toString(),sources);
                 case "fill_form":
                     if(!"basic".equals(page))return result("请打开该项目的「基础信息填报」页面，再请我填写。",sources);
@@ -192,24 +210,36 @@ class AssistantActions {
                     if(id.isBlank())return result("请先选择需要填写的项目。",sources);
                     if(!question.matches("(?s).*(代填|填写(?:(?:软著)?基础信息|表单|当前页面|当前表单)|帮我.{0,80}(填|写入|改|设置|补充|完善|更新|录入)|请.{0,80}(填|写入|改|设置|补充|完善|更新|录入)|(?:把|将).{1,80}(填为|改为|设为|写入|改成|填成|换成|更新为)|(?:填入|填写为|改为|设置为|改成|填成|换成|更新为).+).*"))return result("请明确需要填写或更新的字段。",sources);
                     if(!(args.get("fields") instanceof Map<?,?> values)||values.isEmpty())return result("尚未找到可填写的字段，请补充资料。",sources);
-                    var changed=projects.saveAssistantForm(id,Map.of("revision",revision,"fields",values),user);
-                    var labels=projects.fields().stream().filter(f->values.containsKey(f.get("id")))
-                        .map(f->String.valueOf(f.get("label"))).toList();
-                    var result=answer("已处理当前项目草稿中的"+String.join("、",labels)
-                        +"。AI 辅助填写仅供参考，请核对实际资料并人工修订，切勿直接用于申报。",sources);
-                    result.put("changed",!Objects.equals(revision,changed.get("revision")));
-                    result.put("project",changed);
-                    if(args.get("missing") instanceof String missing&&!missing.isBlank()){
-                        result.put("answer",result.get("answer")+"\n仍需补充："+missing.substring(0,Math.min(1000,missing.length())));
-                    }
-                    return new Result(result,null);
+                    if(!id.equals(ProjectService.text(args,"projectId")))
+                        return result("请切换到要修改的软著项目，再打开「基础信息填报」确认修改。",sources);
+                    return new Result(null,null,()->{
+                        var saved=projects.saveAssistantForm(id,Map.of("revision",revision,"fields",values),user);
+                        @SuppressWarnings("unchecked")
+                        var changes=(List<Map<String,String>>)saved.remove("assistantChanges");
+                        operations.add(Map.of("action",action,"projectId",id,"projectName",saved.get("name"),
+                            "version",saved.get("version"),"changes",changes));
+                        var labels=changes.stream().map(change->change.get("label")).toList();
+                        String text=labels.isEmpty()?"该项目草稿没有发生修改。"
+                            :"已修改「"+saved.get("name")+"」草稿中的"+String.join("、",labels)
+                                +"。AI 辅助填写仅供参考，请核对实际资料并人工修订，切勿直接用于申报。";
+                        var result=answer(text,sources);
+                        result.put("changed",!changes.isEmpty());
+                        result.put("project",saved);
+                        if(args.get("missing") instanceof String missing&&!missing.isBlank())
+                            result.put("answer",text+"\n仍需补充："+missing.substring(0,Math.min(1000,missing.length())));
+                        return result;
+                    });
                 case "search_attachments":
-                    observations.add(Map.of("action",action,"result",search(args,id)));break;
+                    var files=search(args,id);
+                    operations.add(Map.of("action",action,"query",ProjectService.text(args,"query"),"count",files.size()));
+                    observations.add(Map.of("action",action,"result",files));break;
                 case "read_attachment":
                     var file=attachment(ProjectService.text(args,"id"));Object content;
                     try{content=read(file,args);}
                     catch(ApiException e){observations.add(Map.of("action",action,"name",file.get("name"),"result",Map.of("warning",e.getMessage())));break;}
                     observations.add(Map.of("action",action,"name",file.get("name"),"projectName",file.get("project_name"),"version",file.get("version"),"result",content));
+                    operations.add(Map.of("action",action,"attachment",file.get("name"),"sourceProject",file.get("project_name"),
+                        "attachmentVersion",file.get("version"),"entry",ProjectService.text(args,"entry")));
                     String excerpt=projects.encode(content);sources.add(Map.of("id",file.get("id"),"name",file.get("name"),"project_id",file.get("project_id"),"excerpt",excerpt.substring(0,Math.min(excerpt.length(),16000))));break;
                 case "answer":return result(ProjectService.required(plan,"answer",50000),sources);
                 default:throw new ApiException(502,"模型未返回有效的行动计划");

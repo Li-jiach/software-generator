@@ -66,9 +66,38 @@ class ManualJobController {
     @PostMapping
     Object start(@PathVariable String id, @RequestBody Map<String,Object> body, HttpServletRequest request) {
         String owner = owner(id, request);
+        var metadata = sourceMetadata(id, owner, body);
+        metadata.putAll(browserSettings(id, body));
+        return ai.request("POST", "/manual/jobs", metadata);
+    }
+
+    @PostMapping("/source")
+    Object startSource(@PathVariable String id, @RequestBody Map<String,Object> body, HttpServletRequest request) {
+        String owner = owner(id, request);
+        return ai.request("POST", "/manual/jobs/source", sourceMetadata(id, owner, body));
+    }
+
+    @PostMapping("/reset")
+    Object reset(@PathVariable String id, HttpServletRequest request) {
+        return ai.request("POST", "/manual/jobs/reset", Map.of("owner", owner(id, request)));
+    }
+
+    @PostMapping("/{job}/generate")
+    Object generate(@PathVariable String id, @PathVariable UUID job, @RequestBody Map<String,Object> body, HttpServletRequest request) {
+        String owner = owner(id, request);
+        var settings = browserSettings(id, body);
+        settings.put("owner", owner);
+        return ai.request("POST", path(job) + "/generate", settings);
+    }
+
+    Map<String,Object> browserSettings(String id, Map<String,Object> body) {
         String url = savedUrl(id);
         if (url.isBlank() || !url.equals(ProjectService.text(body,"url")))
             throw new ApiException(422,"请先由管理员保存本项目的截图入口，再开始分析。");
+        return new LinkedHashMap<>(Map.of("url", url, "browserReady", Boolean.TRUE.equals(body.get("browserReady"))));
+    }
+
+    Map<String,Object> sourceMetadata(String id, String owner, Map<String,Object> body) {
         String fileId = ProjectService.required(body, "fileId", 36);
         var files = projects.db().queryForList("SELECT name, storage_path FROM attachments WHERE project_id=? AND id=? AND deleted=FALSE", id, fileId);
         if (files.isEmpty()) throw new ApiException(404,"未找到该项目的源码附件");
@@ -82,8 +111,7 @@ class ManualJobController {
             String value = form.getOrDefault(String.valueOf(f.get("id")), "");
             if (!value.isBlank()) basic.put(String.valueOf(f.get("label")), value);
         }
-        return ai.request("POST","/manual/jobs",Map.of("owner",owner,"archive",store.path(file).toString(),
-            "url", url, "browserReady",Boolean.TRUE.equals(body.get("browserReady")),
+        return new LinkedHashMap<>(Map.of("owner",owner,"archive",store.path(file).toString(),
             "project",project,"basic",basic));
     }
 

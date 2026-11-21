@@ -1,5 +1,5 @@
 -- 生产环境完整建表入口，MySQL 8.0+，UTF8MB4。
--- 最新结构版本：2026-11-20 / V004。
+-- 最新结构版本：2026-11-20 / V005。
 -- 本文件只创建缺失结构，不删除现有业务数据；重复执行安全。
 -- 升级现有数据库时须另执行 database/migrations/ 中相应的增量脚本。
 CREATE DATABASE IF NOT EXISTS copyright_workspace CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   role VARCHAR(20) NOT NULL,
   content MEDIUMTEXT NOT NULL,
   sources_json JSON NOT NULL,
+  operations_json JSON NULL,
   mode VARCHAR(20) NOT NULL DEFAULT 'model',
   cleared BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -221,3 +222,12 @@ CREATE TABLE IF NOT EXISTS application_material_reviews (
 ) ENGINE=InnoDB;
 
 INSERT IGNORE INTO schema_versions(version,description) VALUES('V004','源程序鉴别材料和权属证明审核');
+
+INSERT IGNORE INTO schema_versions(version,description) VALUES('V005','软著助手会话操作与字段修改记忆');
+CREATE TABLE IF NOT EXISTS official_credentials (
+  id TINYINT PRIMARY KEY,
+  encrypted_credentials BLOB NOT NULL,
+  CHECK (id = 1)
+) ENGINE=InnoDB;
+
+INSERT IGNORE INTO schema_versions(version,description) VALUES('V006','官网机构账号加密配置');

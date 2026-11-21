@@ -17,7 +17,7 @@ const toolStates={running:'进行中',finished:'已完成',failed:'失败'}
 let sequence=0
 async function scroll(){await nextTick();if(box.value)box.value.scrollTop=box.value.scrollHeight}
 async function history(){const current=++sequence;try{const rows=await api('/assistant/messages'+query.value);if(current===sequence){messages.value=rows;await scroll()}}catch(e){emit('notify',e.message,true)}}
-watch(projectId,history,{immediate:true})
+watch(projectId,()=>{messages.value=[];history()},{immediate:true})
 watch(open,()=>{if(open.value)scroll()})
 async function ask(text){
  const q=String(text||question.value).trim()
@@ -47,7 +47,7 @@ async function ask(text){
   })
   if(result.changed&&pid===projectId.value)emit('filled',result.project)
   if(pid===projectId.value){
-   messages.value.push({role:'assistant',content:result.answer,sources:result.sources,mode:result.mode,tools:turn.tools})
+   messages.value.push({role:'assistant',content:result.answer,sources:result.sources,mode:result.mode,operations:result.operations})
   }
   live.value=null
  }catch(e){
@@ -67,8 +67,21 @@ async function importDoc(e){const f=e.target.files?.[0];if(!f)return;if(f.size>5
 defineExpose({open:()=>{open.value=true}})
 </script>
 <template>
- <div class="assistant-widget"><section v-if="open" class="assistant-panel open"><div class="assistant-head"><div class="assistant-brand"><span class="assistant-brand-icon"><Bot :size="22"/></span><div><strong>软著助手</strong><small>知识搜索 · 辅助填报 · 项目检索</small></div></div><div class="assistant-head-actions"><button class="assistant-icon-btn" title="助手设置" aria-label="助手设置" @click="configure"><Settings2 :size="15"/></button><button class="assistant-icon-btn" title="清空会话" aria-label="清空会话" :disabled="sending" @click="clear"><Trash2 :size="14"/></button><button class="assistant-icon-btn" title="收起助手" aria-label="收起助手" @click="open=false"><X :size="16"/></button></div></div><div class="assistant-context"><BookOpen :size="13"/><strong>{{project?.name||'软著填报要求知识库'}}</strong></div>
- <div v-if="!messages.length" class="assistant-suggestions"><button v-for="q in ['申请软著需要哪些材料？','主要功能应该怎么填写？','源程序每页有什么要求？']" :key="q" @click="ask(q)">{{q}}</button></div><div ref="box" class="assistant-messages"><div v-if="!messages.length" class="chat-msg"><span class="chat-icon"><Bot :size="17"/></span><div class="bubble">你好，我是软著助手。可以查询登记要求、辅助填写当前项目草稿，也可以按项目名称或附件查阅资料。</div></div><div v-for="(m,i) in messages" :key="m.id||i" class="chat-msg" :class="{user:m.role==='user'}"><span v-if="m.role==='assistant'" class="chat-icon"><Bot :size="17"/></span><div class="bubble"><div>{{m.content}}</div><ul v-if="m.tools?.length" class="assistant-tools"><li v-for="(tool,index) in m.tools" :key="index">{{toolNames[tool.name]}} · {{toolStates[tool.state]}}</li></ul><div v-if="m.role==='assistant'&&m.mode==='retrieval'" class="answer-mode">知识库检索</div><button v-for="(c,j) in m.sources" :key="c.id+'-'+j" class="cite-chip" @click="source=c"><FileText :size="11"/>[{{j+1}}] {{c.name}}</button></div></div><div v-if="visibleTurn" class="chat-msg">
+ <div class="assistant-widget"><section v-if="open" class="assistant-panel open"><div class="assistant-head"><div class="assistant-brand"><span class="assistant-brand-icon"><Bot :size="22"/></span><div><strong>软著助手</strong><small>知识搜索 · 辅助填报 · 项目检索</small></div></div><div class="assistant-head-actions"><button class="assistant-icon-btn" title="助手设置" aria-label="助手设置" @click="configure"><Settings2 :size="15"/></button><button class="assistant-icon-btn" title="清空会话" aria-label="清空会话" :disabled="sending" @click="clear"><Trash2 :size="14"/></button><button class="assistant-icon-btn" title="收起助手" aria-label="收起助手" @click="open=false"><X :size="16"/></button></div></div><div class="assistant-context"><BookOpen :size="13"/><strong>{{project ? [project.name, project.version].filter(Boolean).join(' · ') : '软著填报要求知识库'}}</strong></div>
+ <div v-if="!messages.length" class="assistant-suggestions"><button v-for="q in ['申请软著需要哪些材料？','主要功能应该怎么填写？','源程序每页有什么要求？']" :key="q" @click="ask(q)">{{q}}</button></div><div ref="box" class="assistant-messages"><div v-if="!messages.length" class="chat-msg"><span class="chat-icon"><Bot :size="17"/></span><div class="bubble">你好，我是软著助手。可以查询登记要求、辅助填写当前项目草稿，也可以按项目名称或附件查阅资料。</div></div><div v-for="(m,i) in messages" :key="m.id||i" class="chat-msg" :class="{user:m.role==='user'}"><span v-if="m.role==='assistant'" class="chat-icon"><Bot :size="17"/></span><div class="bubble"><div>{{m.content}}</div><details v-if="m.operations?.length" class="assistant-tools">
+ <summary>本轮操作</summary>
+ <div v-for="(operation,index) in m.operations" :key="index">
+  <strong>{{toolNames[operation.action]}}</strong>
+  <span v-if="operation.projectName"> · {{operation.projectName}} {{operation.version}}</span>
+  <span v-if="operation.attachment"> · {{operation.attachment}}<template v-if="operation.sourceProject">（{{operation.sourceProject}}）</template></span>
+  <p v-if="operation.changes?.length===0">没有字段变更</p>
+  <div v-for="change in operation.changes" :key="change.field">
+   <strong>{{change.label}}</strong>
+   <div>修改前 · {{change.before||'未填写'}}</div>
+   <div>修改后 · {{change.after||'未填写'}}</div>
+  </div>
+ </div>
+</details><div v-if="m.role==='assistant'&&m.mode==='retrieval'" class="answer-mode">知识库检索</div><button v-for="(c,j) in m.sources" :key="c.id+'-'+j" class="cite-chip" @click="source=c"><FileText :size="11"/>[{{j+1}}] {{c.name}}</button></div></div><div v-if="visibleTurn" class="chat-msg">
    <span class="chat-icon"><Bot :size="17"/></span>
    <div class="bubble">
     <div v-if="visibleTurn.text">{{visibleTurn.text}}</div>

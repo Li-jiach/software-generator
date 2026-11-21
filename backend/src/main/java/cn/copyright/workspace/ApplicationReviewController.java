@@ -1,7 +1,9 @@
 package cn.copyright.workspace;
 
 import jakarta.servlet.http.HttpServletRequest;
+import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
@@ -12,9 +14,15 @@ class ApplicationReviewController {
     private final ProjectService projects;
     private final AuthService auth;
 
-    ApplicationReviewController(ProjectService projects, AuthService auth) {
+    private final OfficialCredentials credentials;
+    private final Map<String, Launch> launches = new ConcurrentHashMap<>();
+
+    private record Launch(UUID ticket, String projectId, Object revision, Instant expiresAt) {}
+
+    ApplicationReviewController(ProjectService projects, AuthService auth, OfficialCredentials credentials) {
         this.projects = projects;
         this.auth = auth;
+        this.credentials = credentials;
     }
 
     @GetMapping("/application-precheck")
@@ -28,13 +36,47 @@ class ApplicationReviewController {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     Object start(@PathVariable String id, HttpServletRequest req) {
         var user = auth.current(req);
-        var project = projects.raw(id, user, true);
-        if (!canStart(user)) throw new ApiException(403, "仅管理员或行政业务办可启动申报");
-        var checks = projects.applicationChecks(id, project);
-        if (checks.stream().anyMatch(check -> !"approved".equals(check.get("status"))))
-            throw new ApiException(409, "四项材料均须审核通过后才能启动申报");
+        approvedProject(id, user);
         projects.log(id, user, "启动申报流程预览", "当前四项材料均已审核通过");
         return Map.of("mode", "preview");
+    }
+
+    @PostMapping("/official-application/start")
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    Object startOfficial(@PathVariable String id, HttpServletRequest req) {
+        var user = auth.current(req);
+        var project = approvedProject(id, user);
+        Instant now = Instant.now();
+        launches.values().removeIf(launch -> !launch.expiresAt().isAfter(now));
+        var launch = new Launch(UUID.randomUUID(), id, project.get("revision"), now.plusSeconds(120));
+        launches.put(AuthService.hash(auth.cookie(req)), launch);
+        return Map.of("ticket", launch.ticket());
+    }
+
+    @PostMapping("/official-application/consume")
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    Object consumeOfficial(@PathVariable String id, @RequestBody Map<String,Object> body, HttpServletRequest req) {
+        var user = auth.current(req);
+        String session = AuthService.hash(auth.cookie(req));
+        var launch = launches.get(session);
+        if (launch == null || !launch.projectId().equals(id) ||
+            !launch.ticket().toString().equals(ProjectService.text(body, "ticket")) ||
+            !launch.expiresAt().isAfter(Instant.now()) || !launches.remove(session, launch))
+            throw new ApiException(409, "启动凭证已失效，请从工作台重新启动申报");
+
+        var project = approvedProject(id, user);
+        projects.checkRevision(project, launch.revision());
+        var login = "admin".equals(user.get("role")) ? credentials.read() : Map.<String,String>of();
+        projects.log(id, user, "启动官网填报", "已向 Ui.Vision 提供当前审核版本");
+        return Map.of("form", projects.form(id), "login", login);
+    }
+
+    private Map<String,Object> approvedProject(String id, Map<String,Object> user) {
+        if (!canStart(user)) throw new ApiException(403, "仅管理员或行政业务办可启动申报");
+        var project = projects.raw(id, user, true);
+        if (projects.applicationChecks(id, project).stream().anyMatch(check -> !"approved".equals(check.get("status"))))
+            throw new ApiException(409, "四项材料均须审核通过后才能启动申报");
+        return project;
     }
 
     @PostMapping("/application-materials/{kind}/submit")
