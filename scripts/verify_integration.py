@@ -463,7 +463,8 @@ def verify_review_ui(admin, project_id):
 def verify_official_macro(page, macro, configured, session_failure=None):
     data = {
         'fullName':'测试软件','version':'V2.0','shortName':'测试','rights':'全部权利',
-        'devFinish':'2025-06-01','devCPU':'测试型号','devRAM':'16 GB',
+        'devFinish':'2025-06-01','softwareType':'应用软件','copyrightOwner':'测试著作权人',
+        'supportSoftware':'PostgreSQL 16，Redis 7','devCPU':'测试型号','devRAM':'16 GB',
         'runCPU':'运行型号','runRAM':'8 GB','languages':'Java,Python'
     }
     portal_html = """<meta charset="utf-8"><body><script>
@@ -471,7 +472,8 @@ def verify_official_macro(page, macro, configured, session_failure=None):
         const testRetry = sessionKey.endsWith('_False');
         const blockedSession = sessionKey.endsWith('_blocked');
         const rejectedSession = sessionKey.endsWith('_rejected');
-        window.getCookie = () => !blockedSession && !!sessionStorage[sessionKey];
+        window.getCookie = () => !blockedSession &&
+          document.cookie.split('; ').includes(sessionKey+'=verified');
         const pages = {
           application: `
             <section class="fillin_item"><h3>软件全称</h3><input id="name"></section>
@@ -481,10 +483,19 @@ def verify_official_macro(page, macro, configured, session_failure=None):
              <label><input style="display:none" type="radio" name="rights">部分权利</label>
              <label><input style="display:none" type="radio" name="rights" id="all">全部权利</label>
             </section>`,
-          development:'<section class="fillin_item"><h3>开发完成日期</h3><input type="date" id="date"></section>',
+          development:`
+            <section class="fillin_item"><h3>软件分类</h3><div class="hd-select">
+              <div class="box">应用软件</div><div class="dropdown" hidden><div class="hd-option">应用软件</div></div>
+            </div></section>
+            <section class="fillin_item"><h3>著作权人</h3><table><tr><td>测试著作权人</td></tr></table></section>
+            <section class="fillin_item"><h3>开发完成日期</h3><input type="date" id="date"></section>`,
           features:`
             <section class="fillin_item"><h3>开发的硬件环境</h3><textarea id="dev"></textarea></section>
             <section class="fillin_item"><h3>运行的硬件环境</h3><textarea id="run"></textarea></section>
+            <section class="fillin_item"><h3>软件运行支撑环境 / 支持软件</h3><textarea id="support"></textarea></section>
+            ${['程序鉴别材料','文档鉴别材料','其他相关证明文件'].map(label =>
+              '<section class="fillin_item"><h3>'+label+'</h3><div class="hdUpload"><div class="hdUpload-imgBtn hdUpload-item">上传<input type="file" hidden></div></div></section>'
+            ).join('')}
             <section class="fillin_item"><h3>编程语言</h3>
              <label><input style="display:none" type="checkbox" id="java">Java</label>
              <label><input style="display:none" type="checkbox" id="python">Python</label>
@@ -492,15 +503,70 @@ def verify_official_macro(page, macro, configured, session_failure=None):
         };
         function render(stage) {
           history.replaceState(null,'','#/'+stage);
-          document.body.innerHTML = pages[stage]+'<button>下一步</button>';
-          document.querySelector('button').onclick = () => {
+          document.body.innerHTML = pages[stage]+'<div class="fillin_button"><button>下一步</button></div>';
+          const next = document.querySelector('.fillin_button button');
+          const saved = {};
+          if (stage==='application') {
+            for (const key of ['name','version','short']) {
+              document.querySelector('#'+key).addEventListener('blur',event=>{
+                if (event.isTrusted) saved[key]=event.target.value;
+                if (key==='version' && !saved.name) sessionStorage.fixtureMissingSoftName='yes';
+              });
+            }
+          }
+          if (stage==='development') {
+            next.disabled = true;
+            setTimeout(()=>{next.disabled=false},900);
+            document.querySelector('.hd-select .box').onclick=()=>{
+              sessionStorage.fixtureTouchedCategory='yes';
+            };
+          }
+          if (stage==='features' && testRetry) {
+            const group = document.querySelector('.hdUpload');
+            const card = document.createElement('div');
+            card.className = 'hdUpload-item hdUpload-item-imgBox';
+            card.innerHTML = '<p class="pdfName">源程序鉴别材料.pdf</p>';
+            group.append(card);
+            group.querySelector('input').addEventListener('change',()=>{sessionStorage.fixtureReuploaded='yes'});
+          }
+          next.onclick = () => {
             if (stage==='application') {
-              const inputs = ['#name','#version','#short'].map(selector=>document.querySelector(selector).value);
+              const inputs = [saved.name,saved.version,saved.short];
               if (inputs.join('|')==='测试软件|V2.0|测试' && document.querySelector('#all').checked) render('development');
             }
-            if (stage==='development' && document.querySelector('#date').value==='2025-06-01') render('features');
-            if (stage==='features') history.replaceState(null,'','#/confirm');
+            if (stage==='development' && document.querySelector('#date').value==='2025-06-01') {
+              render('features');
+            }
+            if (stage==='features' && document.querySelectorAll('.pdfName').length===3) {
+              const filenames = [...document.querySelectorAll('.pdfName')].map(node=>node.textContent);
+              sessionStorage.fixtureFields = ['#dev','#run','#support'].map(selector=>document.querySelector(selector).value)
+                .concat(['#java','#python'].map(selector=>document.querySelector(selector).checked)).join('|');
+              history.replaceState(null,'','#/confirm');
+              document.body.innerHTML='<div class="material_list"><table><tr><td></td><td><input value="1"></td></tr></table></div><button>确认填报</button>';
+              for (const name of filenames) {
+                const item = document.createElement('p');
+                item.textContent = name;
+                document.querySelector('.material_list td').append(item);
+              }
+              document.querySelector('button').onclick=()=>{history.replaceState(null,'','#/success')};
+            }
           };
+          for (const input of document.querySelectorAll('input[type=file]')) {
+            input.onchange=async ()=>{
+              const file=input.files[0];
+              if (!file || file.type!=='application/pdf' || !(await file.text()).startsWith('%PDF-')) return;
+              const card=document.createElement('div');
+              card.className='hdUpload-item';
+              card.innerHTML='<i class="hdUpload-item-progressLoop"></i>';
+              input.closest('.hdUpload').append(card);
+              setTimeout(()=>{
+                const name=document.createElement('p');
+                name.className='pdfName';
+                name.textContent=file.name;
+                card.replaceChildren(name);
+              },200);
+            };
+          }
         }
         function renderLogin(root, onVerified) {
           root.innerHTML='<button id="org">机构</button><div id="login"></div>';
@@ -520,6 +586,7 @@ def verify_official_macro(page, macro, configured, session_failure=None):
                 }
                 root.querySelector('#login').innerHTML='<button id="verify">人工安全验证</button>';
                 root.querySelector('#verify').onclick=()=>{
+                  document.cookie=sessionKey+'=verified; domain=ccopyright.com.cn; path=/';
                   sessionStorage[sessionKey]=Date.now();
                   onVerified();
                 };
@@ -568,61 +635,70 @@ def verify_official_macro(page, macro, configured, session_failure=None):
         redeemed = route.fetch()
         assert redeemed.ok, 'the actual launch endpoint validates the ticket'
         account = {'username':'fixture-admin','password':'fixture-password'} if configured else {}
-        route.fulfill(json={'form':data,'login':account})
+        route.fulfill(json={**redeemed.json(),'form':data,'login':account})
 
     page.context.route('https://register.ccopyright.com.cn/**',serve_portal)
     page.context.route('**/official-application/consume',serve_payload)
+    popup = None
     try:
         setup = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialStarted')
-        tick = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialStep')
+        tick = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Command']=='executeScript' and cmd['Value']=='officialStep')
         expect('fixture-password' not in str(macro), 'the browser macro stores no credentials')
-        viewer = page.locator('#official-browser')
-        def click_portal(control):
-            control.scroll_into_view_if_needed()
-            relative = control.evaluate("""el => {
-                const r = el.getBoundingClientRect();
-                return [(r.left+r.width/2)/innerWidth, (r.top+r.height/2)/innerHeight];
-            }""")
-            bounds = viewer.bounding_box()
-            page.mouse.click(bounds['x'] + relative[0]*bounds['width'],
-                             bounds['y'] + relative[1]*bounds['height'])
+        popup_start = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialPopupStarted')
         page.evaluate('code => new Function(code)()',setup)
-        page.wait_for_selector('#official-live[data-official-state=running]',state='attached')
-        expect(viewer.get_attribute('src')=='https://register.ccopyright.com.cn/login.html',
-               'the official application opens the formal login page first')
-        frame = page.frame_locator('#official-browser')
+        opener = page.get_by_role('button', name='打开申报窗口')
+        opener.wait_for()
+        expect(len(page.context.pages) == 1, 'approval finishes before any popup can take focus')
+        with page.expect_popup() as opened:
+            opener.click()
+        popup = opened.value
+        popup.wait_for_load_state('domcontentloaded')
+        target = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Target'].startswith('title=官网申报窗口'))
+        expect(popup.title() == target.removeprefix('title='),
+               'Ui.Vision selects the exact window opened for this run')
+        popup.evaluate('code => new Function(code)()',popup_start)
+        popup.wait_for_url('https://register.ccopyright.com.cn/login.html')
         manual = False
         entered_credentials = False
         reloaded_login = False
         waited_after_login = False
-        for _ in range(260):
+        clicked_pages = set()
+        for _ in range(360):
             if '等待 5 秒' in page.locator('#official-live [role=status]').inner_text():
                 waited_after_login = True
-            portal_frame = next((item for item in page.frames if item.url.startswith('https://register.ccopyright.com.cn/')), None)
-            if portal_frame:
-                try:
-                    portal_frame.evaluate('code => new Function(code)()',tick)
-                except Exception as error:
-                    if 'Execution context was destroyed' not in str(error):
-                        raise
+            try:
+                popup.evaluate('code => new Function(code)()',tick)
+            except Exception as error:
+                if 'Execution context was destroyed' not in str(error):
+                    raise
             retry_login = page.get_by_role('button',name='重新加载官网登录页')
             if not configured and not reloaded_login and retry_login.is_visible():
                 retry_login.click()
                 reloaded_login = True
                 entered_credentials = False
-            if not configured and not entered_credentials and frame.locator('#org').is_visible():
+            if not configured and not entered_credentials and popup.locator('#org').is_visible():
                 pending = page.locator('#official-live [role=status]')
-                if '登录' in pending.inner_text() and '下方' in pending.inner_text():
-                    click_portal(frame.locator('#org'))
-                    frame.get_by_placeholder('请输入账号').fill('fixture-admin')
-                    frame.locator('input[type=password]').fill('fixture-password')
-                    click_portal(frame.locator('#submit'))
+                if '登录' in pending.inner_text() and '官网' in pending.inner_text():
+                    popup.locator('#org').click()
+                    popup.get_by_placeholder('请输入账号').fill('fixture-admin')
+                    popup.locator('input[type=password]').fill('fixture-password')
+                    popup.locator('#submit').click()
                     entered_credentials = True
-            if frame.locator('#verify').is_visible():
+            if popup.locator('#verify').is_visible():
                 expect('安全验证' in page.locator('#official-live [role=status]').inner_text(),
                        'the workbench keeps the actual verification controls interactive')
-                click_portal(frame.get_by_role('button',name='人工安全验证'))
+                popup.get_by_role('button',name='人工安全验证').click()
                 manual = True
+            status = page.locator('#official-live [role=status]').inner_text()
+            stage = popup.url.rsplit('/', 1)[-1]
+            if stage == 'identity' and '请在官网选择办理身份' in status:
+                popup.get_by_role('heading', name='我是申请人').click()
+            elif '手动点击「下一步」' in status and stage in {'application','development','features'} and stage not in clicked_pages:
+                for _ in range(3):
+                    popup.evaluate('code => new Function(code)()',tick)
+                expect(popup.url.endswith('#/'+stage), f'the macro waits for the operator on {stage}')
+                popup.get_by_role('button',name='下一步',exact=True).click()
+                clicked_pages.add(stage)
             if page.locator('#official-live').get_attribute('data-official-state')=='done':
                 break
             page.wait_for_timeout(70)
@@ -633,37 +709,38 @@ def verify_official_macro(page, macro, configured, session_failure=None):
                    page.locator('#official-live').get_attribute('data-official-state') == 'done',
                    'the macro stops when the official login session is missing or rejected')
             if session_failure == 'blocked':
-                expect(any(item.url.endswith('/account.html') for item in page.frames),
+                expect(popup.url.endswith('/account.html'),
                        'an account page without a cookie does not trigger navigation to R11')
             recovery = page.get_by_role('link', name='在新标签页打开官网')
             expect(recovery.get_attribute('href') == 'https://register.ccopyright.com.cn/login.html' and
                    recovery.get_attribute('target') == '_blank',
                    'the recovery link opens the official login as a top-level page')
             return
-        expect((configured or entered_credentials) and manual and '已填写' in status,
+        expect((configured or entered_credentials) and manual and '信息和附件已填至官网确认页' in status,
                f'the macro resumes after login across all three R11 stages (configured={configured}, status={status})')
         expect(configured or reloaded_login, 'an official login network warning can be retried inside the same workbench run')
-        expect(waited_after_login and frame.locator('body').evaluate(
+        expect(waited_after_login and popup.evaluate(
             "() => !sessionStorage.fixture_signed_in_TrueEarly && !sessionStorage.fixture_signed_in_FalseEarly"),
             'the macro waits five seconds after verification before reopening registration or clicking R11')
-        expect(frame.locator('#dev').input_value()=='CPU 测试型号，内存 16 GB' and
-               frame.locator('#run').input_value()=='CPU 运行型号，内存 8 GB' and
-               frame.locator('#java').is_checked() and frame.locator('#python').is_checked(),
-               'operator can see the written fields in the live browser frame')
-        expect(any(item.url.endswith('#/features') for item in page.frames), 'the macro stops before confirmation')
-        expect(viewer.get_attribute('src')=='https://register.ccopyright.com.cn/login.html',
-               'login and registration navigation stay within the original official frame')
-        original_viewport = page.viewport_size
-        page.set_viewport_size({'width': 390, 'height': 844})
-        page.wait_for_function("""() => {
-            const iframe = document.querySelector('#official-browser');
-            const viewport = iframe.parentElement;
-            return iframe.offsetWidth >= 1280 &&
-                Math.abs(iframe.getBoundingClientRect().width - viewport.clientWidth) <= 1;
-        }""")
-        page.set_viewport_size(original_viewport)
+        expect(popup.evaluate('sessionStorage.fixtureFields') ==
+               'CPU 测试型号，内存 16 GB|CPU 运行型号，内存 8 GB|PostgreSQL 16，Redis 7|true|true',
+               'the macro fills hardware and language fields before uploading')
+        expect(popup.evaluate('!sessionStorage.fixtureMissingSoftName'),
+               'the real blur sequence saves the software name before the version validation')
+        expect(popup.evaluate('!sessionStorage.fixtureTouchedCategory'),
+               'an existing software category is preserved while the macro waits for the Next button')
+        expect(not popup.evaluate('sessionStorage.fixtureReuploaded'),
+               'an existing uploaded card is recognized without selecting the PDF again')
+        expect(popup.url.endswith('#/confirm') and popup.get_by_role('button',name='确认填报').is_enabled() and
+               popup.locator('.material_list td p').all_text_contents() ==
+               ['源程序鉴别材料.pdf','操作手册.pdf','权属证明.pdf'],
+               'the macro uploads approved PDFs and stops before pressing confirmation')
+        expect(popup.evaluate('code => new Function(code)()',tick) == 'done',
+               'the macro receives its stop signal in the official window')
 
     finally:
+        if popup is not None:
+            popup.close()
         page.context.unroute('https://register.ccopyright.com.cn/**',serve_portal)
         page.context.unroute('**/official-application/consume',serve_payload)
 
@@ -693,15 +770,15 @@ def verify_application_ui(client, admin, project_id):
                 page.get_by_role('button', name='启动申报', exact=True).click()
                 page.wait_for_function('window.launchMacro !== null')
                 expect(page.url == initial_url and len(page.context.pages)==1 and
-                       page.locator('#official-live #official-browser').count()==1,
-                       f'starting leaves the interactive official frame on the original workspace page (run {attempt + 1}, '
-                       f'url={page.url}, initial={initial_url}, tabs={len(page.context.pages)})')
+                       page.locator('#official-live iframe').count()==0,
+                       'starting requests Ui.Vision approval in the current tab before opening the official window')
                 macro = page.evaluate('window.launchMacro')
                 select_window, wait_for_panel = macro['Commands'][:2]
                 expect(select_window['Target'] == 'title=' + page.title()
                        and page.locator(wait_for_panel['Target'].removeprefix('css=')).count()==1,
                        'Ui.Vision targets the active workbench tab and its launch panel')
-                expect(macro['Name'] == 'Copyright_R11_Fill' and any(cmd['Command']=='selectFrame' for cmd in macro['Commands'])
+                expect(macro['Name'] == 'Copyright_R11_Fill' and any(cmd['Command']=='selectWindow' and cmd['Target'].startswith('title=官网申报窗口')
+                                                                          for cmd in macro['Commands'])
                        and '联调验证项目' not in str(macro), 'application button launches a reusable macro without saved form data')
                 verify_official_macro(page, macro, configured=attempt != 1, session_failure=failure)
             page.set_viewport_size({'width': 390, 'height': 844})
@@ -745,9 +822,12 @@ try:
     p = request(office, "GET", f"/projects/{pid}").json()
     expect(p["formStatus"] == "draft" and p["revision"] == invalid["revision"] and p["form"]["shortName"] == "可继续填写", "failed validation preserves editable draft and revision")
     fields = request(admin, "GET", "/metadata").json()["fields"]
+    expect(any(issue['field']=='supportSoftware' for issue in request(
+           research, 'POST', f'/projects/{pid}/form/validate').json()),
+           'support software is required by the server')
     values = {}
     for f in fields:
-        values[f["id"]] = f["opts"][0] if f.get("type") == "select" else "2026-01-01" if f.get("type") == "date" else "1" if f.get("type") == "number" else "验证环境与功能说明"
+        values[f["id"]] = f["opts"][0] if f.get("type") in ("select","multiselect") else "2026-01-01" if f.get("type") == "date" else "1" if f.get("type") == "number" else "验证环境与功能说明"
     values.update(fullName="联调验证项目（临时）", version="V1.0", mainFunction="本系统提供项目登记、分工填报、材料管理、审核核验、进度查询以及知识检索功能，面向研发人员和知识产权管理人员，支持数据记录、附件留存、业务查询、资料归档与工作协同。" * 10)
     p = request(admin, "PUT", f"/projects/{pid}/form", json={"revision": p["revision"], "fields": values}).json()
     expect(not p["validation"], "server-side field validation")
@@ -770,7 +850,7 @@ try:
     request(admin, "POST", form_review, expected=409, json=decision)
     p = request(admin, "POST", form_review, json={**decision, "revision": p["revision"]}).json()
     expect(p["formStatus"] == "approved" and p["formReviews"]["all"]["status"] == "approved", "form-level approval")
-    p = request(research, "PUT", f"/projects/{pid}/form", json={"revision": p["revision"], "fields": {"purpose": "再次修改开发目的"}}).json()
+    p = request(research, "PUT", f"/projects/{pid}/form", json={"revision": p["revision"], "fields": {"purpose": "再次修改软件开发目的"}}).json()
     expect(p["formStatus"] == "draft" and "all" not in p["formReviews"], "changing an approved form invalidates approval")
     content = "项目内部资料：隔离测试标记PrivateEvidence。源程序每页不少于50行。".encode()
     one = request(office, "POST", f"/projects/{pid}/files", files={"file": ("填报测试资料.txt", content, "text/plain")}, data={"category": "技术文档"}).json()
@@ -810,6 +890,21 @@ try:
     manual=request(office,'PUT',f'/projects/{pid}/manual',json={'revision':manual['revision'],'chapters':[{'id':'ch1','title':'测试章节','body':'实际操作说明与结果','verified':True}]}).json()
     manual=request(office,'POST',f'/projects/{pid}/manual/submit',json={'revision':manual['revision']}).json()
     request(admin,'POST',f'/projects/{pid}/manual/review',json={'revision':manual['revision'],'status':'approved'})
+    from pypdf import PdfWriter
+    pdf = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    writer.write(pdf)
+    official_pdf = pdf.getvalue()
+    from docx import Document
+    official_docx = io.BytesIO()
+    word = Document()
+    word.add_paragraph("R11 operation manual")
+    word.save(official_docx)
+    approved_manual = request(office, 'POST', f'/projects/{pid}/files',
+                              files={'file': ('操作手册.docx', official_docx.getvalue(),
+                                              'application/vnd.openxmlformats-officedocument.wordprocessingml.document')},
+                              data={'category': '操作手册'}).json()
     material_path = f'/projects/{pid}/application-materials'
     precheck_path = f'/projects/{pid}/application-precheck'
     start_path = f'/projects/{pid}/application-preview/start'
@@ -821,9 +916,9 @@ try:
     request(office, 'POST', start_path, expected=409)
     request(research, 'POST', start_path, expected=403, headers={'X-Role': 'admin'})
     request(research, 'POST', material_path+'/source/submit', expected=422, json={'attachmentId': zipped['id']})
-    for kind, category, filename in [('source', '源程序鉴别材料', '源程序鉴别材料.txt'), ('ownership', '权属材料', '权属证明.txt')]:
+    for kind, category, filename in [('source', '源程序鉴别材料', '源程序鉴别材料.pdf'), ('ownership', '权属材料', '权属证明.pdf')]:
         artifact = request(research, 'POST', f'/projects/{pid}/files',
-                           files={'file': (filename, content, 'text/plain')}, data={'category': category}).json()
+                           files={'file': (filename, official_pdf, 'application/pdf')}, data={'category': category}).json()
         review_path = material_path + f'/{kind}/review'
         submit_path = material_path + f'/{kind}/submit'
         submission = request(research, 'POST', submit_path, json={'attachmentId': artifact['id']}).json()
@@ -848,10 +943,24 @@ try:
     request(admin,'POST',official_path+'/consume',expected=409,json=ticket)
     launch = request(office,'POST',official_path+'/consume',json=ticket)
     expect('no-store' in launch.headers.get('Cache-Control', '') and
-           launch.json()['form']['fullName'] == values['fullName'] and launch.json()['login'] == {},
+           launch.json()['form']['fullName'] == values['fullName'] and launch.json()['login'] == {} and
+           launch.json()['materials']['manual']['id'] == 'chapters' and
+           set(launch.json()['materials']) == {'manual','source','ownership'},
            'one-time launch uses approved data and only administrators may use shared credentials')
     request(office,'POST',official_path+'/consume',expected=409,json=ticket)
+    approved = launch.json()['materials']
+    for kind, item in approved.items():
+        pdf_path = official_path + f"/materials/{kind}/{item['id']}/pdf"
+        params = {'sha256': item['sha256']}
+        request(research, 'GET', pdf_path, expected=403, params=params)
+        request(office, 'GET', pdf_path, expected=409, params={'sha256': '0'*64})
+        result = request(office, 'GET', pdf_path, params=params)
+        expect(result.headers['content-type'] == 'application/pdf' and result.content.startswith(b'%PDF-'),
+               f'approved {kind} material is prepared as a PDF')
     verify_application_ui(office, admin, pid)
+    manual = request(office,'POST',f'/projects/{pid}/manual/submit',
+                     json={'revision':manual['revision']+1,'attachmentId':approved_manual['id']}).json()
+    request(admin,'POST',f'/projects/{pid}/manual/review',json={'revision':manual['revision'],'status':'approved'})
     ticket = request(office,'POST',official_path+'/start').json()
     replacement = request(office, 'POST', f'/projects/{pid}/files',
                           files={'file': (filename, content+b' v2', 'text/plain')}, data={'category': category}).json()
@@ -1101,7 +1210,7 @@ try:
         'projectId':target['id'],'question':'哪个软著的附件提到了 PrivateEvidence？'}).json()
     expect(any(c['project_id']==pid and 'PrivateEvidence' in c['excerpt'] for c in archived_result['sources']),
            'assistant finds an archived project by uploaded attachment content across project ACLs')
-    expect('再次修改开发目的' not in seen[-1][1]['messages'][0]['content'], 'project field ACL still applies to project retrieval')
+    expect('再次修改软件开发目的' not in seen[-1][1]['messages'][0]['content'], 'project field ACL still applies to project retrieval')
     fill={'projectId':target['id'],'page':'basic','question':'帮我从跨项目附件填写软件简称'}
     expect(not request(office,'POST','/assistant/chat',json={**fill,'hasUnsaved':True}).json().get('changed'),
            'assistant protects unsaved form input')

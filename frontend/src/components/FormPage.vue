@@ -10,6 +10,12 @@ const form=reactive({}),tab=ref('form'),busy=ref(false),validation=ref([]),sourc
 const required=FIELDS.filter(f=>f.required),filled=computed(()=>required.filter(f=>String(form[f.id]??'').trim()).length)
 function loadForm(p){
   Object.keys(form).forEach(k=>delete form[k]);Object.assign(form,p.form)
+  for(const [key,prefix] of [['developmentHardware','dev'],['runtimeHardware','run']]){
+    if(Object.hasOwn(form,key))continue
+    const hardware=[['CPU','CPU '],['RAM','内存 '],['Disk','硬盘 ']]
+      .map(([part,label])=>form[prefix+part]?label+form[prefix+part]:'').filter(Boolean).join('，')
+    if(hardware)form[key]=hardware
+  }
   revision.value=p.revision;validation.value=p.validation||[];emit('dirty',false)
 }
 watch(()=>props.project,loadForm,{immediate:true})
@@ -40,13 +46,21 @@ async function showAssistantField(id){
   document.getElementById('field-'+id)?.scrollIntoView({block:'center'})
 }
 defineExpose({showAssistantField})
+function selectedOptions(field){
+  return String(form[field.id]||'').split(/[,，、]/).map(item=>item.trim()).filter(Boolean)
+}
+function toggleOption(field, option, checked){
+  const values=selectedOptions(field)
+  form[field.id]=(checked?[...values,option]:values.filter(item=>item!==option)).join('，')
+  dirty()
+}
 function errors(id){return validation.value.filter(v=>v.field===id)}
 </script>
 <template>
   <h1 class="page-title sr-only">基础信息填报</h1>
   <div class="panel summary-bar"><div><strong>{{filled}} / {{required.length}}</strong><span class="muted sm"> 必填项已填写</span></div><div class="progress-track"><b :style="{width:filled/required.length*100+'%'}"></b></div><span class="badge" :class="project.formStatus==='approved'?'positive':'info'">v{{project.formVersion}}</span></div>
   <div class="tabs"><button v-for="t in [['form','填写信息'],['reuse','历史复用']]" :key="t[0]" :class="{active:tab===t[0]}" @click="tab=t[0]">{{t[1]}}</button></div>
-  <template v-if="tab==='form'"><div v-if="project.formStatus==='submitted'" class="alert">表单已提交核实，审核期间暂停修改。</div><div v-if="project.formStatus==='returned'&&project.formReviews.all?.comment" class="alert">退回意见：{{project.formReviews.all.comment}}</div><div class="basic-groups"><section v-for="(name,group) in GROUPS" :key="group" class="panel basic-group"><div class="panel-header"><h3 class="panel-title">{{name}}</h3><span class="badge info">{{group==='basic'?'行政业务办':'研发中心'}}</span></div><div class="panel-body"><div class="form-fields"><div v-for="f in FIELDS.filter(f=>f.group===group)" :key="f.id" class="field" :class="{full:f.type==='textarea'}"><label class="field-label" :for="'field-'+f.id">{{f.label}} <span v-if="f.required" class="required">*</span> <span v-if="project.assistantReferenceFields?.includes(f.id)" class="badge warning" title="请核对实际资料并人工修订，切勿直接用于申报">AI 仅供参考</span></label><select v-if="f.type==='select'" :id="'field-'+f.id" v-model="form[f.id]" :disabled="!editable(f)||busy" @change="dirty"><option value="">请选择</option><option v-for="o in f.opts" :key="o">{{o}}</option></select><textarea v-else-if="f.type==='textarea'" :id="'field-'+f.id" v-model="form[f.id]" :disabled="!editable(f)||busy" :rows="f.id==='mainFunction'?8:4" @input="dirty"></textarea><input v-else :id="'field-'+f.id" v-model="form[f.id]" :type="f.type==='number'?'number':f.type==='date'?'date':'text'" :min="f.type==='number'?0:undefined" :disabled="!editable(f)||busy" @input="dirty"/><span v-if="f.id==='mainFunction'" class="muted tiny">{{String(form.mainFunction||'').replace(/\s/g,'').length}} / 500—1300 字</span><span v-for="e in errors(f.id)" :key="e.message" class="field-error">{{e.message}}</span><div v-if="project.formReviews[f.id]?.status==='returned'" class="field-error">退回意见：{{project.formReviews[f.id].comment}}</div></div></div></div></section></div></template>
+  <template v-if="tab==='form'"><div v-if="project.formStatus==='submitted'" class="alert">表单已提交核实，审核期间暂停修改。</div><div v-if="project.formStatus==='returned'&&project.formReviews.all?.comment" class="alert">退回意见：{{project.formReviews.all.comment}}</div><div class="basic-groups"><section v-for="(name,group) in GROUPS" :key="group" class="panel basic-group"><div class="panel-header"><h3 class="panel-title">{{name}}</h3><span class="badge info">{{group==='basic'?'行政业务办':'研发中心'}}</span></div><div class="panel-body"><div class="form-fields"><div v-for="f in FIELDS.filter(f=>f.group===group&&(!f.when||form[f.when]==='例外交存'&&(!f.id.endsWith('Pages')||form[f.when+'Method']==='使用黑色宽斜线覆盖')))" :key="f.id" class="field" :class="{full:['textarea','multiselect'].includes(f.type)}"><label class="field-label" :for="'field-'+f.id">{{f.label}} <span v-if="f.required" class="required">*</span> <span v-if="project.assistantReferenceFields?.includes(f.id)" class="badge warning" title="请核对实际资料并人工修订，切勿直接用于申报">AI 仅供参考</span></label><select v-if="f.type==='select'" :id="'field-'+f.id" v-model="form[f.id]" :disabled="!editable(f)||busy" @change="dirty"><option value="">请选择</option><option v-for="o in f.opts" :key="o">{{o}}</option></select><div v-else-if="f.type==='multiselect'" :id="'field-'+f.id" class="official-options" role="group" :aria-label="f.label"><label v-for="option in [...new Set([...f.opts,...selectedOptions(f)])]" :key="option"><input type="checkbox" :checked="selectedOptions(f).includes(option)" :disabled="!editable(f)||busy||(!selectedOptions(f).includes(option)&&selectedOptions(f).length>=f.maxSelections)" @change="toggleOption(f,option,$event.target.checked)"/>{{option}}</label><span class="muted tiny">最多 {{f.maxSelections}} 项</span></div><textarea v-else-if="f.type==='textarea'" :id="'field-'+f.id" v-model="form[f.id]" :disabled="!editable(f)||busy" :rows="f.id==='mainFunction'?8:3" :maxlength="f.maxLength" @input="dirty"></textarea><input v-else :id="'field-'+f.id" v-model="form[f.id]" :type="f.type==='number'?'number':f.type==='date'?'date':'text'" :min="f.id==='sourceLines'?1:f.type==='number'?0:undefined" :maxlength="f.maxLength" :disabled="!editable(f)||busy" @input="dirty"/><span v-if="f.maxLength" class="muted tiny">{{String(form[f.id]||'').length}} / {{f.minLength?f.minLength+'–':''}}{{f.maxLength}} 字</span><span v-for="e in errors(f.id)" :key="e.message" class="field-error">{{e.message}}</span><div v-if="project.formReviews[f.id]?.status==='returned'" class="field-error">退回意见：{{project.formReviews[f.id].comment}}</div></div></div></div></section></div></template>
   <section v-if="tab==='reuse'" class="panel">
     <div class="panel-header"><h3 class="panel-title">历史项目复用</h3></div>
     <div class="panel-body">
@@ -74,6 +88,10 @@ function errors(id){return validation.value.filter(v=>v.field===id)}
 </template>
 
 <style scoped>
+.official-options { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; }
+.official-options label { display:inline-flex; align-items:center; gap:6px; }
+.official-options input { width:auto; }
+
 .reuse-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

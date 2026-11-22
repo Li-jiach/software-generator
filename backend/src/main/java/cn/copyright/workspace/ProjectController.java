@@ -21,7 +21,7 @@ class ProjectController {
     @PutMapping("/projects/{id}") Object update(@PathVariable String id,@RequestBody Map<String,Object> b,HttpServletRequest req){return projects.update(id,b,auth.current(req));}
     @DeleteMapping("/projects/{id}") Object archive(@PathVariable String id,HttpServletRequest req){projects.archive(id,auth.current(req));return Map.of("ok",true);}
     @PutMapping("/projects/{id}/form") Object form(@PathVariable String id,@RequestBody Map<String,Object> b,HttpServletRequest req){return projects.saveForm(id,b,auth.current(req));}
-    @PostMapping("/projects/{id}/form/validate") Object validate(@PathVariable String id,HttpServletRequest req){projects.raw(id,auth.current(req),false);return projects.validate(projects.form(id));}
+    @PostMapping("/projects/{id}/form/validate") Object validate(@PathVariable String id,HttpServletRequest req){projects.raw(id,auth.current(req),false);return projects.validate(projects.officialForm(id));}
     @PostMapping("/projects/{id}/form/submit") Object submit(@PathVariable String id,@RequestBody(required=false) Map<String,Object> b,HttpServletRequest req){return projects.submit(id,b==null?null:b.get("revision"),auth.current(req));}
     @PostMapping("/projects/{id}/form/review") Object review(@PathVariable String id,@RequestBody Map<String,Object> b,HttpServletRequest req){return projects.review(id,b,auth.current(req));}
 

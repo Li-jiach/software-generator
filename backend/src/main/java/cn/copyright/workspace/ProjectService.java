@@ -47,6 +47,20 @@ class ProjectService {
         m.put("fileCount",db.queryForObject("SELECT COUNT(*) FROM attachments WHERE project_id=? AND deleted=FALSE",Integer.class,p.get("id")));
         return m;
     }
+    Map<String,String> officialForm(String id) {
+        var f = form(id);
+        for (var keys : List.of(List.of("developmentHardware","devCPU","devRAM","devDisk"),
+                                List.of("runtimeHardware","runCPU","runRAM","runDisk"))) {
+            if (f.containsKey(keys.get(0))) continue;
+            var hardware = new StringJoiner("，");
+            for (int i = 1; i < keys.size(); i++) {
+                String value = f.getOrDefault(keys.get(i), "");
+                if (!value.isBlank()) hardware.add(List.of("CPU ", "内存 ", "硬盘 ").get(i-1) + value);
+            }
+            if (hardware.length() > 0) f.put(keys.get(0), hardware.toString());
+        }
+        return f;
+    }
     Map<String,String> form(String id) {
         var f=new LinkedHashMap<String,String>();
         for(var r:db.queryForList("SELECT field_key,field_value FROM project_fields WHERE project_id=?",id))f.put(String.valueOf(r.get("field_key")),String.valueOf(r.get("field_value")));
@@ -74,7 +88,7 @@ class ProjectService {
         m.put("assistantReferenceFields",db.queryForList("SELECT field_key FROM assistant_reference_fields WHERE project_id=?",String.class,id));
         m.put("activity",db.queryForList("SELECT a.id,a.title,a.detail,a.created_at AS time,u.display_name AS actor,u.role FROM activity_logs a JOIN users u ON u.id=a.actor_id WHERE project_id=? ORDER BY a.id DESC LIMIT 100",id));
         m.put("records",db.queryForList("SELECT r.id,r.status,r.reference_no AS referenceNo,r.occurred_at AS occurredAt,r.note,r.evidence_id AS evidenceId,u.display_name AS actor FROM application_records r JOIN users u ON u.id=r.created_by WHERE r.project_id=? ORDER BY r.occurred_at DESC,r.created_at DESC",id));
-        m.put("validation",validate(f));return m;
+        m.put("validation",validate(officialForm(id)));return m;
     }
     List<Map<String,Object>> files(String id) {return db.queryForList("SELECT id,name,category AS type,content_type AS contentType,byte_size AS size,version,content_sha256 AS sha256,extraction_warning AS warning,created_at AS uploaded FROM attachments WHERE project_id=? AND deleted=FALSE ORDER BY created_at DESC,version DESC",id);}
     static String materialCategory(String kind) {
@@ -198,24 +212,47 @@ class ProjectService {
         if(assistant)saved.put("assistantChanges",assistantChanges);
         return saved;
     }
+    List<Map<String,String>> officialFieldIssues(String id) {
+        return validate(officialForm(id)).stream()
+            .filter(issue -> "supportSoftware".equals(issue.get("field"))).toList();
+    }
     List<Map<String,String>> validate(Map<String,String> f) {
         var errors=new ArrayList<Map<String,String>>();
         for(var field:fields) {
             String id=String.valueOf(field.get("id")),label=String.valueOf(field.get("label")),value=f.getOrDefault(id,"").trim();
-            if(value.isEmpty()) {if(field.containsKey("required"))errors.add(Map.of("field",id,"message",label+"为必填项"));continue;}
-            if("number".equals(field.get("type"))&&(!value.matches("\\d+")||value.length()>9))errors.add(Map.of("field",id,"message",label+"应为非负整数"));
+            if(value.isEmpty()) {if(field.containsKey("required") && !(id.equals("languages") && !f.getOrDefault("otherLanguages","").isBlank()))errors.add(Map.of("field",id,"message",label+"为必填项"));continue;}
+            String counted = id.equals("mainFunction") ? value.replaceAll("\\s", "") : value;
+            int length = counted.codePointCount(0, counted.length());
+            if (field.get("maxLength") instanceof Number max && length > max.intValue())
+                errors.add(Map.of("field",id,"message",label+"最多 "+max+" 字"));
+            if (field.get("minLength") instanceof Number min && length < min.intValue())
+                errors.add(Map.of("field",id,"message",label+"至少 "+min+" 字"));
+            if (id.equals("sourceLines") && !value.matches("[1-9][0-9]{0,19}"))
+                errors.add(Map.of("field",id,"message","源程序量必须为正整数且不能以 0 开头"));
+            if (field.get("maxSelections") instanceof Number max &&
+                Arrays.stream(value.split("[,，、]")).map(String::trim).filter(v->!v.isEmpty()).distinct().count() > max.intValue())
+                errors.add(Map.of("field",id,"message",label+"最多选择 "+max+" 项"));
+            if(!id.equals("sourceLines")&&"number".equals(field.get("type"))&&(!value.matches("\\d+")||value.length()>9))errors.add(Map.of("field",id,"message",label+"应为非负整数"));
             if("select".equals(field.get("type"))&&!((List<?>)field.get("opts")).contains(value))errors.add(Map.of("field",id,"message",label+"选项不合法"));
             if("date".equals(field.get("type")))try {if(LocalDate.parse(value).isAfter(LocalDate.now()))errors.add(Map.of("field",id,"message",label+"不能晚于今天"));}catch(Exception e){errors.add(Map.of("field",id,"message",label+"日期格式不合法"));}
         }
-        String function=f.getOrDefault("mainFunction","");int length=function.replaceAll("\\s","").codePointCount(0,function.replaceAll("\\s","").length());
-        if(!function.isBlank()&&(length<500||length>1300))errors.add(Map.of("field","mainFunction","message","主要功能应为500至1300字（按项目填报规范，不计空白）"));
+        for (String kind : List.of("source", "manual")) {
+            String deposit = kind + "Deposit";
+            if (!"例外交存".equals(f.get(deposit))) continue;
+            String method = f.getOrDefault(deposit + "Method", "");
+            if (method.isBlank())
+                errors.add(Map.of("field",deposit+"Method","message","请选择例外交存方式"));
+            if ("使用黑色宽斜线覆盖".equals(method) &&
+                !f.getOrDefault(deposit+"Pages","").matches("[0-9]+(?:[,，、-][0-9]+)*"))
+                errors.add(Map.of("field",deposit+"Pages","message","请填写遮盖页码，例如 1-3、8"));
+        }
         for(String id:List.of("fullName","version"))if(f.getOrDefault(id,"").length()>(id.equals("fullName")?200:80))errors.add(Map.of("field",id,"message","软件名称或版本超出长度限制"));
         return errors;
     }
     @Transactional Map<String,Object> submit(String id,Object revision,Map<String,Object> u) {
         var p=raw(id,u,true);if(!Set.of("draft","returned").contains(String.valueOf(p.get("form_status"))))throw new ApiException(409,"当前状态不能重复提交");
         if(revision!=null)checkRevision(p,revision);
-        var errors=validate(form(id));if(!errors.isEmpty())throw new ApiException(422,"填报校验未通过："+errors.get(0).get("message"));
+        var errors=validate(officialForm(id));if(!errors.isEmpty())throw new ApiException(422,"填报校验未通过："+errors.get(0).get("message"));
         db.update("UPDATE projects SET form_status='submitted',revision=revision+1 WHERE id=?",id);log(id,u,"提交表单审核","填报版本 v"+p.get("form_version"));return detail(id,u);
     }
     String formStatus(Map<String,Object> project) {
@@ -250,7 +287,7 @@ class ProjectService {
             throw new ApiException(400, "请选择审核结果，不通过时须填写原因");
 
         var values = form(id);
-        if ("approved".equals(status) && !validate(values).isEmpty())
+        if ("approved".equals(status) && !validate(officialForm(id)).isEmpty())
             throw new ApiException(422, "仍有未通过的填报校验项");
         db.update("""
             INSERT INTO field_reviews(project_id,field_key,field_value_hash,form_version,status,comment,reviewer_id)

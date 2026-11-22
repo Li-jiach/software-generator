@@ -13,7 +13,8 @@
 | POST `/projects/{id}/form/submit` | 校验并提交审核，可携带已保存草稿的 revision |
 | POST `/projects/{id}/form/review` | 管理员整表审核，提交 revision 与 status（approved 或 returned），returned 必须填写 comment |
 | POST `/projects/{id}/official-application/start` | 管理员或行政业务办经四项预检取得一次性启动凭证 |
-| POST `/projects/{id}/official-application/consume` | 同一工作台会话以 ticket 领取当前审核表单，服务端再次校验审核状态；系统管理员可领取机构登录配置 |
+| POST `/projects/{id}/official-application/consume` | 同一工作台会话以 ticket 领取当前审核表单和已通过审核的附件标识及 SHA-256。服务端再次校验审核状态，系统管理员可领取机构登录配置 |
+| GET `/projects/{id}/official-application/materials/{kind}/{fileId}/pdf?sha256=…` | 对照当前审核附件和原件哈希生成申报 PDF，仅管理员或行政业务办可用 |
 | GET / PUT `/admin/official-credentials` | 系统管理员读取已配置账号，或提交 username 和 password 更新加密配置 |
 | POST `/projects/{id}/files` | multipart附件上传，file及category |
 | GET `/projects/{id}/files/{fileId}/download` | 原件下载，安全类型支持inline=true预览 |

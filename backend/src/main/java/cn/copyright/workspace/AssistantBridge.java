@@ -74,6 +74,27 @@ class AssistantBridge {
             }
         }catch(ApiException e){throw e;}catch(Exception e){throw new ApiException(503,"无法下载手册任务文件");}
     }
+    byte[] officialPdf(String suffix, byte[] file, boolean excerpt) {
+        try {
+            var req=HttpRequest.newBuilder(URI.create(baseUrl+"/official/material-pdf?suffix="+suffix+"&excerpt="+excerpt))
+                .timeout(Duration.ofSeconds(70)).header("X-Service-Token",token)
+                .header("Content-Type","application/octet-stream")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(file)).build();
+            var response=client.send(req,HttpResponse.BodyHandlers.ofInputStream());
+            try(var in=response.body()) {
+                if(response.statusCode()!=200) {
+                    var error=json.readTree(in.readNBytes(8192));
+                    throw new ApiException(response.statusCode(),error.path("detail").asText("附件转换失败"));
+                }
+                var pdf=in.readNBytes(20*1024*1024+1);
+                if(pdf.length>20*1024*1024)throw new ApiException(422,"转换后的 PDF 超过官网 20 MB 上限");
+                return pdf;
+            }
+        }catch(ApiException e){throw e;}
+        catch(InterruptedException e){Thread.currentThread().interrupt();throw new ApiException(503,"附件转换已中断");}
+        catch(Exception e){throw new ApiException(503,"附件转换服务暂不可用");}
+    }
+
     Map<String,Object> extract(String name,byte[] bytes) {
         try {
             String boundary="Copyright-"+UUID.randomUUID();

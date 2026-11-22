@@ -17,7 +17,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -358,6 +358,19 @@ async def chat_stream(request: ChatRequest):
             yield stream_event("error", {"message": "模型流式回答中断或格式无效，请重试"})
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+@app.post("/official/material-pdf", dependencies=[Depends(internal_auth)])
+async def official_material_pdf(request: Request, suffix: str, excerpt: bool = False):
+    from official_pdf import LIMIT, prepare_pdf
+
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > LIMIT:
+            raise HTTPException(422, "附件超过 20 MB")
+        content.extend(chunk)
+    pdf = await asyncio.to_thread(prepare_pdf, bytes(content), suffix, excerpt)
+    return Response(pdf, media_type="application/pdf")
 
 
 @app.post("/extract", dependencies=[Depends(internal_auth)])

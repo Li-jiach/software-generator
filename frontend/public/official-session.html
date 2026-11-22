@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>官网申报窗口</title>
+<script>
+  const viewer = location.hash.slice(1);
+  if (/^[a-f0-9-]{36}$/.test(viewer)) document.title += ' · ' + viewer.slice(0, 8);
+</script>
+<p>正在连接 Ui.Vision，稍后打开官网。</p>
+</html>
