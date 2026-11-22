@@ -2,7 +2,7 @@
 import {computed, onMounted, onUnmounted, ref} from 'vue'
 import {Play} from 'lucide-vue-next'
 import {api, statusName} from '../api'
-import {startOfficialViewer} from '../official-launch'
+import {markOfficialSessionReset, startOfficialViewer} from '../official-launch'
 import {loginUrl} from '../official-macro'
 
 const props=defineProps({project:Object})
@@ -52,7 +52,11 @@ async function start(){
   await load()
  }
 }
-onMounted(load)
+onMounted(()=>{
+ if(performance.getEntriesByType('navigation')[0]?.type==='reload' && location.hash==='#rpa')
+  markOfficialSessionReset()
+ load()
+})
 onUnmounted(()=>{
  disposed=true
  viewer?.dispose()

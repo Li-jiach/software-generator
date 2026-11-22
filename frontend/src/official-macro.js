@@ -69,6 +69,16 @@ export function portal(action, data) {
     return node.value === value
   }
 
+  if (action === 'reset-login') {
+    localStorage.removeItem('webUserInfo')
+    localStorage.removeItem('upgradeVo')
+    sessionStorage.clear()
+    for (const domain of ['', '; Domain=ccopyright.com.cn']) {
+      document.cookie = 'webUserInfo=; Max-Age=0; Path=/; Secure' + domain
+    }
+    return !document.cookie.split(';').some(cookie => cookie.trim().startsWith('webUserInfo='))
+  }
+
   if (action === 'navigate') {
     if ((location.pathname === '/login.html' || inlineLogin()) &&
         all('.hd-message, [role=alert], .hd-dialog').some(node => /网络(?:异常|错误|连接失败)/.test(normalize(node.textContent))))
@@ -78,7 +88,15 @@ export function portal(action, data) {
       if (document.readyState !== 'complete') return 'waiting'
       return missingSession() ? 'registration-session-missing' : 'home'
     }
-    if (stage === 'identity') return 'identity'
+    if (stage === 'identity') {
+      if (all('.hd-dialog,[role=dialog]').length) return 'identity-blocked'
+      const applicant = one(exact('我是申请人', all('h2')))
+      if (!applicant || data.observingLogin || data.applicantClicked) return 'identity'
+      const card = applicant.closest('.created') || applicant
+      if (!editable(card) || card.matches('.disabled-1,.disabled-2')) return 'identity-blocked'
+      card.click()
+      return 'applicant-clicked'
+    }
     if (stage === 'application' &&
         (!findControls(['软件全称', '软件名称']).length || !findControls(['版本号', '软件版本号', '软件版本']).length))
       return 'form-loading'
@@ -380,13 +398,14 @@ function runPortalStep(workbench, viewer, act) {
   })
 }
 
-export function officialMacro(project, ticket, viewer, origin) {
+export function officialMacro(project, ticket, viewer, origin, resetSession = false) {
   const boot = JSON.stringify({project, ticket, viewer})
   const evaluatePortal = 'return (' + runPortalStep + ')(' + JSON.stringify(origin) + ',' +
     JSON.stringify(viewer) + ',' + portal + ');'
+  const entryUrl = resetSession ? portalOrigin + '/registration.html#/registerSoft' : loginUrl
   const popupStart = 'if (location.origin === ' + JSON.stringify(origin) +
     ' && window.opener) { window.opener.postMessage({type:"official-popup-start",viewer:' +
-    JSON.stringify(viewer) + '},location.origin); setTimeout(() => location.replace(' + JSON.stringify(loginUrl) + '), 400); } return true;'
+    JSON.stringify(viewer) + '},location.origin); setTimeout(() => location.replace(' + JSON.stringify(entryUrl) + '), 400); } return true;'
   const command = (Command, Target = '', Value = '') => ({Command, Target, Value})
   return {
     Name: 'Copyright_R11_Fill',

@@ -300,7 +300,7 @@ def start_manual_from_folder(client, project_id):
             assert upload.value.ok, upload.value.text()
             page.get_by_text('已上传 直接上传.zip', exact=True).wait_for()
             expect(page.get_by_role('combobox', name='项目源码附件').count() == 0
-                   and start.is_enabled()
+                   and start.is_disabled()
                    and request(client, 'GET', project_path + '/manual-jobs').json()['job'] is None,
                    'ZIP button opens the file chooser and uploads without starting analysis')
             page.get_by_label('选择路径', exact=True).set_input_files(folder)
@@ -308,6 +308,20 @@ def start_manual_from_folder(client, project_id):
             expect(request(client, 'GET', project_path + '/manual-jobs').json()['job'] is None
                    and all(f['name'] != '项目样例.zip' for f in request(client, 'GET', project_path).json()['files']),
                    'source selection alone neither uploads the folder nor creates a job')
+            ready = page.get_by_role('checkbox', name='已在 Google Chrome 中打开测试站点', exact=False)
+            test = page.get_by_role('button', name='测试站点', exact=True)
+            expect(test.is_disabled(), 'site testing requires Chrome confirmation')
+            help_button = page.get_by_role('button', name='查看开发者模式打开方式')
+            help_button.click()
+            guide = page.get_by_role('dialog', name='打开 Chrome 开发者工具')
+            expect(guide.is_visible() and guide.get_by_text('Windows / Linux', exact=False).is_visible()
+                   and guide.get_by_text('macOS', exact=False).is_visible(), 'Chrome DevTools help shows both keyboard shortcuts')
+            guide.get_by_role('button', name='关闭', exact=True).click()
+            expect(not ready.is_checked(), 'tutorial dismisses without changing browser confirmation')
+            ready.check()
+            expect(start.is_disabled(), 'Chrome confirmation alone does not enable analysis')
+            test.click()
+            page.get_by_text('测试通过，可以开始分析。', exact=True).wait_for()
             with page.expect_response(lambda response: response.url.endswith('/manual-jobs/source')
                                       and response.request.method == 'POST') as response:
                 start.click()
@@ -332,29 +346,12 @@ def start_manual_from_folder(client, project_id):
             page.get_by_text('后端分析 ·', exact=False).click()
             page.get_by_text('index.html 含项目首页、资料管理和版本详情对话框。', exact=True).wait_for()
             page.get_by_text('ProjectController.java 声明了项目控制器。', exact=True).wait_for()
-            spinner.wait_for(state='hidden')
             expect('PRIVATE_MODEL_REASONING' not in logs.inner_text() and '前端源码分析' in logs.inner_text(),
                    'manual log retains model replies without private reasoning content')
             expect(page.get_by_role('button', name='生成截图计划', exact=True).count() == 0,
                    'screenshot planning has no manual start button')
-            expect(page.get_by_text('保存测试站点入口并勾选 Chrome 确认后', exact=False).is_visible()
-                   and page.locator('.manual-phases .done').get_by_text('源码分析').is_visible(),
-                   'completed source analysis shows what is needed to resume')
-            ready = page.get_by_role('checkbox', name='已在 Google Chrome 中打开测试站点', exact=False)
-            help_button = page.get_by_role('button', name='查看开发者模式打开方式')
-            guide_panel = page.locator('dialog[aria-labelledby="manual-guide-title"]')
-            assert not guide_panel.is_visible(), 'tutorial stays hidden before opening'
-            help_button.click()
-            guide = page.get_by_role('dialog', name='打开 Chrome 开发者工具')
-            expect(guide.is_visible() and guide.get_by_text('Windows / Linux', exact=False).is_visible()
-                   and guide.get_by_text('macOS', exact=False).is_visible(), 'Chrome DevTools help shows both keyboard shortcuts')
-            guide.get_by_role('button', name='关闭', exact=True).click()
-            guide_panel.wait_for(state='hidden')
-            expect(not ready.is_checked(), 'tutorial dismisses without changing browser confirmation')
-            with page.expect_response(lambda response: response.url.endswith('/' + job['id'] + '/generate')
-                                      and response.request.method == 'POST') as response:
-                ready.check()
-            assert response.value.ok, response.value.text()
+            page.wait_for_function("""() => [...document.querySelectorAll('.manual-phases .done')]
+                .some(node => node.textContent.includes('源码分析'))""")
             active_phase = page.locator('.manual-phases .running')
             active_phase.wait_for()
             expect(active_phase.evaluate("el => getComputedStyle(el, '::after').animationName") == 'manual-phase-sweep',
@@ -460,7 +457,7 @@ def verify_review_ui(admin, project_id):
             browser.close()
 
 
-def verify_official_macro(page, macro, configured, session_failure=None):
+def verify_official_macro(page, macro, configured, session_failure=None, reset_session=False):
     data = {
         'fullName':'测试软件','version':'V2.0','shortName':'测试','rights':'全部权利',
         'devFinish':'2025-06-01','softwareType':'应用软件','copyrightOwner':'测试著作权人',
@@ -657,7 +654,16 @@ def verify_official_macro(page, macro, configured, session_failure=None):
         expect(popup.title() == target.removeprefix('title='),
                'Ui.Vision selects the exact window opened for this run')
         popup.evaluate('code => new Function(code)()',popup_start)
-        popup.wait_for_url('https://register.ccopyright.com.cn/login.html')
+        if reset_session:
+            popup.wait_for_url('https://register.ccopyright.com.cn/registration.html#/registerSoft')
+            popup.evaluate('code => new Function(code)()',tick)
+            popup.wait_for_url('https://register.ccopyright.com.cn/login.html')
+            expect(not any(cookie['name']=='webUserInfo' for cookie in popup.context.cookies()),
+                   'the next run after a workbench reload clears the official domain cookie')
+            expect(not page.evaluate("sessionStorage.getItem('copyright-official-reset-session')"),
+                   'the reset is acknowledged and consumed once')
+        else:
+            popup.wait_for_url('https://register.ccopyright.com.cn/login.html')
         manual = False
         entered_credentials = False
         reloaded_login = False
@@ -691,9 +697,7 @@ def verify_official_macro(page, macro, configured, session_failure=None):
                 manual = True
             status = page.locator('#official-live [role=status]').inner_text()
             stage = popup.url.rsplit('/', 1)[-1]
-            if stage == 'identity' and '请在官网选择办理身份' in status:
-                popup.get_by_role('heading', name='我是申请人').click()
-            elif '手动点击「下一步」' in status and stage in {'application','development','features'} and stage not in clicked_pages:
+            if '手动点击「下一步」' in status and stage in {'application','development','features'} and stage not in clicked_pages:
                 for _ in range(3):
                     popup.evaluate('code => new Function(code)()',tick)
                 expect(popup.url.endswith('#/'+stage), f'the macro waits for the operator on {stage}')
@@ -754,7 +758,7 @@ def verify_application_ui(client, admin, project_id):
             page.get_by_role('heading', name='实时申报状态').wait_for()
             expect(page.get_by_role('heading', name='申报流程与执行记录').count()==0,
                    'the live status replaces the execution timeline on the application page')
-            expect(page.locator('.sidebar .brand').inner_text().strip() == '', 'sidebar brand title is removed')
+            expect(page.locator('.sidebar .brand-mark').count() == 0, 'sidebar brand icon is removed')
             page.evaluate("""
                 () => {
                     document.documentElement.setAttribute('data-kantu', '1');
@@ -766,6 +770,10 @@ def verify_application_ui(client, admin, project_id):
             """)
             initial_url = page.url
             for attempt, failure in enumerate((None, None, 'blocked', 'rejected')):
+                if attempt == 0:
+                    page.context.add_cookies([{'name':'webUserInfo','value':'fixture','domain':'.ccopyright.com.cn',
+                                               'path':'/','secure':True}])
+                    page.evaluate("sessionStorage.setItem('copyright-official-reset-session','pending')")
                 page.evaluate('window.launchMacro = null')
                 page.get_by_role('button', name='启动申报', exact=True).click()
                 page.wait_for_function('window.launchMacro !== null')
@@ -780,7 +788,7 @@ def verify_application_ui(client, admin, project_id):
                 expect(macro['Name'] == 'Copyright_R11_Fill' and any(cmd['Command']=='selectWindow' and cmd['Target'].startswith('title=官网申报窗口')
                                                                           for cmd in macro['Commands'])
                        and '联调验证项目' not in str(macro), 'application button launches a reusable macro without saved form data')
-                verify_official_macro(page, macro, configured=attempt != 1, session_failure=failure)
+                verify_official_macro(page, macro, configured=attempt != 1, session_failure=failure, reset_session=attempt == 0)
             page.set_viewport_size({'width': 390, 'height': 844})
             expect(page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'application preview fits a mobile viewport')
             expect(page.get_by_role('heading', name='申报页面', exact=True).count() == 0
@@ -1029,6 +1037,13 @@ try:
     expect(request(office,'GET',settings).json()['url']==job_body['url'],'project screenshot entry is persisted and shared with project members')
     request(office, 'POST', jobs, expected=422, json={**job_body, 'browserReady': False})
     request(office, 'POST', jobs, expected=422, json={**job_body, 'url': 'https://example.invalid/'})
+    request(office, 'POST', jobs+'/source', expected=422, json={**job_body, 'browserReady': False})
+    missing_site = job_body['url'] + '-missing'
+    request(admin, 'PUT', settings, json={'url': missing_site})
+    request(office, 'POST', jobs+'/preflight', expected=422, json={'url': missing_site, 'browserReady': True})
+    request(office, 'POST', jobs+'/source', expected=422, json={**job_body, 'url': missing_site})
+    expect(request(office, 'GET', jobs).json()['job'] is None, 'an unreachable site cannot create a source job')
+    request(admin, 'PUT', settings, json={'url': job_body['url']})
     start_index = len(seen)
     vision_start = len(seen)
     stall_review.set()
@@ -1177,7 +1192,7 @@ try:
            'reset preserves completed files and the saved capture entry')
     attachments = request(office, 'GET', f'/projects/{pid}').json()['files']
     archive_id = next(f['id'] for f in attachments if f['name'] == '项目样例.zip')
-    active_job = request(office, 'POST', jobs + '/source', json={'fileId': archive_id}).json()
+    active_job = request(office, 'POST', jobs + '/source', json={**job_body, 'fileId': archive_id}).json()
     request(office, 'POST', jobs + '/reset')
     active_path = jobs + '/' + active_job['id']
     expect(request(office, 'GET', active_path).json()['status'] == 'cancelled'

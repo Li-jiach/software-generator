@@ -71,10 +71,20 @@ class ManualJobController {
         return ai.request("POST", "/manual/jobs", metadata);
     }
 
+    @PostMapping("/preflight")
+    Object testSite(@PathVariable String id, @RequestBody Map<String,Object> body, HttpServletRequest request) {
+        String owner = owner(id, request);
+        var settings = browserSettings(id, body);
+        settings.put("owner", owner);
+        return ai.request("POST", "/manual/jobs/preflight", settings);
+    }
+
     @PostMapping("/source")
     Object startSource(@PathVariable String id, @RequestBody Map<String,Object> body, HttpServletRequest request) {
         String owner = owner(id, request);
-        return ai.request("POST", "/manual/jobs/source", sourceMetadata(id, owner, body));
+        var metadata = sourceMetadata(id, owner, body);
+        metadata.putAll(browserSettings(id, body));
+        return ai.request("POST", "/manual/jobs/source", metadata);
     }
 
     @PostMapping("/reset")
@@ -94,7 +104,9 @@ class ManualJobController {
         String url = savedUrl(id);
         if (url.isBlank() || !url.equals(ProjectService.text(body,"url")))
             throw new ApiException(422,"请先由管理员保存本项目的截图入口，再开始分析。");
-        return new LinkedHashMap<>(Map.of("url", url, "browserReady", Boolean.TRUE.equals(body.get("browserReady"))));
+        if (!Boolean.TRUE.equals(body.get("browserReady")))
+            throw new ApiException(422,"请先勾选 Chrome 测试站点确认。");
+        return new LinkedHashMap<>(Map.of("url", url, "browserReady", true));
     }
 
     Map<String,Object> sourceMetadata(String id, String owner, Map<String,Object> body) {

@@ -100,28 +100,7 @@ async def launch(playwright):
     return browser
 
 
-async def preflight(url: str):
-    capture_origin(url)
-    try:
-        async with browser_session() as playwright:
-            browser = await launch(playwright)
-            try:
-                cdp = await browser.new_browser_cdp_session()
-                version = await cdp.send('Browser.getVersion')
-                return str(version['product'])
-            finally:
-                await browser.close()
-    except ManualError:
-        raise
-    except Exception:
-        raise ManualError('未能验证 Google Chrome 的开发者工具连接。') from None
-
-
-async def capture(url: str, shots: list[Shot], folder: Path, images, report, review, skip):
-    from playwright.async_api import Error, TimeoutError
-
-    origin = capture_origin(url)
-
+def readonly_routes(origin):
     async def restrict(route):
         req = route.request
         try:
@@ -141,6 +120,47 @@ async def capture(url: str, shots: list[Shot], folder: Path, images, report, rev
 
     async def block_socket(socket):
         await socket.close()
+
+    return restrict, block_socket
+
+
+async def preflight(url: str):
+    origin = capture_origin(url)
+    restrict, block_socket = readonly_routes(origin)
+    try:
+        async with browser_session() as playwright:
+            browser = await launch(playwright)
+            try:
+                cdp = await browser.new_browser_cdp_session()
+                version = await cdp.send('Browser.getVersion')
+                context = await browser.new_context(accept_downloads=False, service_workers='block')
+                await context.route('**/*', restrict)
+                await context.route_web_socket('**/*', block_socket)
+                page = await context.new_page()
+                try:
+                    response = await page.goto(url, wait_until='load', timeout=16000)
+                except Exception:
+                    raise ManualError('Chrome 无法打开测试站点，请检查站点是否运行及入口地址。') from None
+                login_path = re.search(r'(?:^|/|#)(?:login|log-in|signin|sign-in|sso)(?:[/?#]|$)',
+                                       urlsplit(page.url).path + '#' + urlsplit(page.url).fragment, re.I)
+                password = await page.locator('input[type=password]').filter(visible=True).count()
+                if not response or not response.ok or login_path or password:
+                    raise ManualError('测试站点需要登录或未返回可访问页面，请提供无需登录的入口。')
+                return str(version['product'])
+            finally:
+                await browser.close()
+    except ManualError:
+        raise
+    except Exception:
+        raise ManualError('未能验证 Google Chrome 的开发者工具连接。') from None
+
+
+async def capture(url: str, shots: list[Shot], folder: Path, images, report, review, skip):
+    from playwright.async_api import Error, TimeoutError
+
+    origin = capture_origin(url)
+
+    restrict, block_socket = readonly_routes(origin)
 
     async def take_image(browser, shot, mode):
         width, height = VIEWPORTS[mode]

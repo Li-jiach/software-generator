@@ -1,6 +1,13 @@
 import {fieldMap, loginUrl, officialMacro, portalOrigin, stages} from './official-macro.js'
 
+const resetKey = 'copyright-official-reset-session'
+
+export function markOfficialSessionReset() {
+  sessionStorage.setItem(resetKey, 'pending')
+}
+
 export function startOfficialViewer({project, ticket, panel, viewer, onStatus, onFinish}) {
+  const resetSession = Boolean(sessionStorage.getItem(resetKey))
   const controller = new AbortController()
   const signal = controller.signal
   const previousTitle = document.title
@@ -25,6 +32,7 @@ export function startOfficialViewer({project, ticket, panel, viewer, onStatus, o
   let entryRetryAt = 0
   let returnedHome = false
   let attemptedLogin = false
+  let applicantClicked = false
   let resumedRegistration = false
   let waitingForLogin = false
   let loginNetworkError = false
@@ -56,7 +64,7 @@ export function startOfficialViewer({project, ticket, panel, viewer, onStatus, o
 
   function navigate() {
     const waitForEntry = entryAttempts >= 2 || Date.now() < entryRetryAt
-    request = {action:'navigate', input:{waitForEntry,observingLogin:waitingForLogin}, next:onNavigation}
+    request = {action:'navigate', input:{waitForEntry,observingLogin:waitingForLogin,applicantClicked}, next:onNavigation}
   }
 
   function onNavigation(state) {
@@ -128,7 +136,11 @@ export function startOfficialViewer({project, ticket, panel, viewer, onStatus, o
       else navigate()
       return
     }
-    if (state === 'identity') show('请在官网选择办理身份。进入申请信息页后会自动填写。')
+    if (state === 'applicant-clicked') {
+      applicantClicked = true
+      show('已点击「我是申请人」，等待官网打开申请信息页。')
+    }
+    if (state === 'identity-blocked') show('官网暂未进入申请信息页。请处理当前窗口的提示。')
     if (state === expectedStage && Object.hasOwn(stages,state)) {
       waitingForLogin = false
       currentStage = state
@@ -425,7 +437,20 @@ export function startOfficialViewer({project, ticket, panel, viewer, onStatus, o
         panel.dataset.officialState !== 'ready') return
     panel.dataset.officialState = 'running'
     launchState = 'running'
-    show('正在打开官网登录页。')
+    if (resetSession) {
+      show('正在清理官网登录会话。')
+      request = {action:'reset-login', input:{}, next:cleared=>{
+        if (!cleared) {
+          finish('官网登录会话未能清理。请在官网退出登录后重新启动。')
+          return
+        }
+        sessionStorage.removeItem(resetKey)
+        show('已清理官网登录会话，正在打开登录页。', loginUrl)
+        navigate()
+      }}
+    } else {
+      show('正在打开官网登录页。')
+    }
   }, {signal})
 
   function openPortal() {
@@ -453,7 +478,7 @@ export function startOfficialViewer({project, ticket, panel, viewer, onStatus, o
       if (panel.dataset.officialState === 'starting') finish('Ui.Vision 未启动。若刚才取消了授权，请刷新页面后重试。', 'approval-timeout')
     }, 60000)
     window.dispatchEvent(new CustomEvent('kantuSaveAndRunMacro',{
-      detail:{json:officialMacro(project,ticket,viewer,location.origin),storageMode:'browser'}
+      detail:{json:officialMacro(project,ticket,viewer,location.origin,resetSession),storageMode:'browser'}
     }))
   } else {
     finish('未检测到 Ui.Vision。请在已安装并启用扩展的 Chrome 中打开工作台。')

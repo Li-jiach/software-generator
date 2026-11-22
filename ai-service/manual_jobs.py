@@ -649,6 +649,17 @@ def router(auth, configured_model, model_chunks, model_object):
         except ManualError as exc:
             raise HTTPException(422, str(exc)) from None
 
+    async def verify_site(url, browser_ready):
+        check_browser(url, browser_ready)
+        try:
+            return await preflight(url)
+        except ManualError as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @routes.post('/preflight')
+    async def test_site(request: GenerateRequest):
+        return {'ok': True, 'browser': await verify_site(request.url, request.browserReady)}
+
     def check_capacity(owner):
         if any(j.request.owner == owner and j.status == 'running' for j in jobs.values()):
             raise HTTPException(409, '已有手册任务正在运行。')
@@ -672,11 +683,12 @@ def router(auth, configured_model, model_chunks, model_object):
 
     @routes.post('')
     async def start(request: Start):
-        check_browser(request.url, request.browserReady)
+        await verify_site(request.url, request.browserReady)
         return create_job(request, analyze)
 
     @routes.post('/source')
     async def start_source(request: Start):
+        await verify_site(request.url, request.browserReady)
         return create_job(request, analyze_sources)
 
     @routes.post('/{job_id}/generate')

@@ -19,6 +19,10 @@ const manual=ref(null)
 const logPane=ref(null)
 const followLog=ref(true)
 const url=ref(''), savedUrl=ref(''), loadingSettings=ref(true)
+const testingSite=ref(false), testedUrl=ref(''), siteError=ref('')
+const canTestSite=computed(()=>ready.value&&!!savedUrl.value&&url.value.trim()===savedUrl.value)
+const sitePassed=computed(()=>canTestSite.value&&testedUrl.value===savedUrl.value)
+watch([ready,url,savedUrl],()=>{testedUrl.value='';siteError.value=''},{flush:'sync'})
 const sourceGroups={frontend:'前端',backend:'后端'}
 const phases=['源码分析','功能目录','页面路径','主要操作','实景截图','Word 手册']
 const stateNames={running:'进行中',source_ready:'源码分析完成',review:'准备截图',complete:'已完成',failed:'失败',cancelled:'已停止'}
@@ -42,7 +46,7 @@ const hasResults=computed(()=>result.value.sourceSelection||result.value.modules
 const sourceSelected=computed(()=>Boolean(localSource.value))
 const canGenerate=computed(()=>!sourceSelected.value&&result.value.sourceSelection?.groups?.frontend.readPaths.length>0&&
  (job.value.status==='source_ready'||(job.value.status==='failed'&&job.value.stage>0&&!result.value.shots)))
-const canContinue=computed(()=>canGenerate.value&&ready.value&&!!savedUrl.value&&url.value.trim()===savedUrl.value)
+const canContinue=computed(()=>canGenerate.value&&sitePassed.value)
 const nextPlanJob=computed(()=>!pending.value&&canContinue.value&&job.value?.status==='source_ready'?job.value.id:null)
 let timer, disposed=false, generation=0
 
@@ -168,14 +172,29 @@ async function uploadArchive(file, name){
  emit('refresh')
  return uploaded.id
 }
+async function testSite(){
+ if(!canTestSite.value||testingSite.value)return
+ testingSite.value=true
+ testedUrl.value=''
+ siteError.value=''
+ const entry=savedUrl.value
+ try{
+  await api(`${path.value}/preflight`,{method:'POST',body:{url:entry,browserReady:ready.value}})
+  if(!disposed&&canTestSite.value&&savedUrl.value===entry)testedUrl.value=entry
+ }catch(e){if(!disposed)siteError.value=e.message}
+ finally{testingSite.value=false}
+}
 function startAnalysis(){
- if(!sourceSelected.value||active.value||loadingSettings.value)return
+ if(!sourceSelected.value||!sitePassed.value||testingSite.value||active.value||loadingSettings.value)return
  return command(async()=>{
   const source=localSource.value
   archiving.value=Boolean(source.files)
   try{
    const attachmentId=source.fileId||await uploadArchive(await folderArchive(source.files),source.name)
-   const next=await api(`${path.value}/source`,{method:'POST',body:{fileId:attachmentId}})
+   const next=await api(`${path.value}/source`,{method:'POST',body:{fileId:attachmentId,url:savedUrl.value,browserReady:ready.value}}).catch(error=>{
+    if(error.status===422){testedUrl.value='';siteError.value=error.message}
+    throw error
+   })
    localSource.value=null
    return next
   }finally{archiving.value=false}
@@ -247,22 +266,25 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
 <template>
   <section class="manual-section">
    <h2 class="panel-title">生成设置</h2>
-   <fieldset :disabled="pending||active||loadingSettings" class="manual-inputs">
+   <fieldset :disabled="pending||active||loadingSettings||testingSite" class="manual-inputs">
     <div class="field full"><label for="manual-url">本机测试站点入口</label><input id="manual-url" v-model="url" type="url" placeholder="http://127.0.0.1:3000/" maxlength="500" :readonly="user.role!=='admin'"/><small v-if="user.role!=='admin'&&!savedUrl" class="muted">请联系管理员设置本项目的测试站点入口。</small></div>
     <div class="full actions">
      <label class="manual-verify"><input v-model="ready" type="checkbox" required/> 已在 Google Chrome 中打开测试站点，确认开发者工具可用，且无需登录即可访问</label>
+     <button type="button" class="btn btn-sm" :disabled="!canTestSite" @click="testSite">{{testingSite?'正在测试站点…':'测试站点'}}</button>
      <button type="button" class="btn btn-sm" aria-haspopup="dialog" @click="devtoolsGuide.showModal()">查看开发者模式打开方式</button>
     </div>
+    <p v-if="sitePassed" class="full muted" role="status">测试通过，可以开始分析。</p>
+    <p v-if="siteError" class="full field-error" role="alert">{{siteError}}</p>
    </fieldset>
    <div class="actions" role="group" aria-label="手册生成操作">
     <input ref="folderInput" type="file" aria-label="选择路径" webkitdirectory multiple hidden @change="chooseFolder"/>
     <input ref="zipInput" type="file" accept=".zip,application/zip" hidden @change="chooseZip"/>
-    <button v-if="user.role==='admin'" type="button" class="btn" :disabled="pending||active||loadingSettings||url.trim()===savedUrl" @click="saveUrl">保存站点入口</button>
-    <button type="button" class="btn" :disabled="pending||active||loadingSettings" @click="folderInput.click()">选择路径</button>
-    <button type="button" class="btn" :disabled="pending||active||loadingSettings" @click="zipInput.click()"><FileArchive :size="14"/> 使用源码 ZIP</button>
-    <button type="button" class="btn btn-primary" :disabled="pending||active||loadingSettings||!sourceSelected" @click="startAnalysis"><Play :size="15"/> 开始分析</button>
+    <button v-if="user.role==='admin'" type="button" class="btn" :disabled="pending||active||loadingSettings||testingSite||url.trim()===savedUrl" @click="saveUrl">保存站点入口</button>
+    <button type="button" class="btn" :disabled="pending||active||loadingSettings||testingSite" @click="folderInput.click()">选择路径</button>
+    <button type="button" class="btn" :disabled="pending||active||loadingSettings||testingSite" @click="zipInput.click()"><FileArchive :size="14"/> 使用源码 ZIP</button>
+    <button type="button" class="btn btn-primary" :disabled="pending||active||loadingSettings||testingSite||!sourceSelected||!sitePassed" @click="startAnalysis"><Play :size="15"/> 开始分析</button>
     <button v-if="active" type="button" class="btn" :disabled="pending" @click="command(()=>api(`${path}/${job.id}`,{method:'DELETE'}))"><Square :size="14"/> 停止任务</button>
-    <button type="button" class="btn" :disabled="pending||loadingSettings||!(job||sourceSelected||ready)" @click="reset"><RotateCcw :size="14"/> 重置状态</button>
+    <button type="button" class="btn" :disabled="pending||loadingSettings||testingSite||!(job||sourceSelected||ready)" @click="reset"><RotateCcw :size="14"/> 重置状态</button>
     <button v-if="job?.status==='failed'&&canGenerate" type="button" class="btn btn-primary" :disabled="pending||!canContinue" @click="generate">重试当前步骤</button>
     <template v-if="result.shots">
      <button v-if="canRetryCapture" type="button" class="btn btn-primary" :disabled="pending" @click="command(()=>api(`${path}/${job.id}/capture`,{method:'POST'}))"><Camera :size="15"/> 重试当前步骤</button>
@@ -320,7 +342,7 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
      :class="{current:runningStage===i||(job?.status==='review'&&job.stage===i),running:runningStage===i,done:phaseDone(i)&&runningStage!==i}"
      :aria-current="runningStage===i||(job?.status==='review'&&job.stage===i)?'step':undefined"><span>{{i}}</span>{{phase}}</li>
    </ol>
-   <p v-if="job?.status==='source_ready'&&canGenerate&&!canContinue" class="alert" role="status">源码分析已完成。保存测试站点入口并勾选 Chrome 确认后，系统会自动开始截图。</p>
+   <p v-if="job?.status==='source_ready'&&canGenerate&&!canContinue" class="alert" role="status">源码分析已完成。测试站点通过后，系统会自动开始规划截图。</p>
    <p v-else-if="job?.status==='source_ready'&&!sourceSelected&&!canGenerate" class="alert" role="status">源码分析已完成。自动截图需要可读取的前端源码。</p>
    <p v-if="archiving" class="muted" role="status">正在扫描并提交源码文件。</p>
    <p v-else-if="!job" class="muted">暂无解析任务</p>

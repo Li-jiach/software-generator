@@ -25,7 +25,8 @@
 | GET `/projects/{id}/reuse/{sourceId}` | 读取已授权历史填报字段 |
 | GET `/notifications` | 管理员查看待核实项，其他用户查看可访问项目的待修改项 |
 | GET/POST `/projects/{id}/manual-jobs` | 获取本账号在本项目的最近一次任务；以 `fileId`、`url`、`browserReady` 创建任务 |
-| POST `/projects/{id}/manual-jobs/source` | 以 `fileId` 启动目录分类和前后端源码分析，完成后状态为 `source_ready` |
+| POST `/projects/{id}/manual-jobs/preflight` | 以 `url`、`browserReady` 测试已保存的入口、Chrome 开发者工具连接及免登录访问 |
+| POST `/projects/{id}/manual-jobs/source` | 以 `fileId`、`url`、`browserReady` 发起源码分析，服务端测试通过后才创建任务 |
 | POST `/projects/{id}/manual-jobs/reset` | 停止当前账号在本项目的生成任务，并清空页面显示的任务状态 |
 | POST `/projects/{id}/manual-jobs/{job}/generate` | 以 `url`、`browserReady` 继续已完成的源码分析任务，自动生成截图计划并截图 |
 | GET/DELETE `/projects/{id}/manual-jobs/{job}` | 查询进度、分析结果和最近的模型回复 `modelLogs`；停止活跃任务 |
