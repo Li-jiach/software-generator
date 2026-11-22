@@ -1,5 +1,4 @@
 export const portalOrigin = 'https://register.ccopyright.com.cn'
-export const registrationUrl = portalOrigin + '/registration.html#/registerSoft'
 export const loginUrl = portalOrigin + '/login.html'
 
 export const fieldMap = {
@@ -45,10 +44,19 @@ export function portal(action, data) {
   const all = (selector, root = document) => [...root.querySelectorAll(selector)].filter(visible)
   const exact = (label, nodes) => nodes.filter(node => normalize(node.textContent) === normalize(label))
   const one = nodes => nodes.length === 1 ? nodes[0] : null
-  const leaf = label => one(exact(label, all('button,a,label,li,span,div').filter(n => !n.children.length)))
+  const leaf = (label,root=document) => one(exact(label, all('button,a,label,li,span,div',root).filter(n => !n.children.length)))
   const controls = 'input:not([type=hidden]):not([type=button]):not([type=submit]):not([type=file]), textarea, select'
   const editable = node => node && !node.disabled && !node.matches('input[type=password],.disabled,.disabled input')
   const stage = location.pathname === '/r11.html' && location.hash.match(/^#\/([a-z]+)/)?.[1]
+  const inlineLogin = () => all('.lg_hd_dialog_warp .hd-dialog')[0] || null
+  // Only inspect whether the portal can read its own cookie.
+  const missingSession = () => {
+    try {
+      return typeof window.getCookie === 'function' && !window.getCookie()
+    } catch {
+      return true
+    }
+  }
   const setValue = (node, value) => {
     Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), 'value').set.call(node, value)
     node.dispatchEvent(new Event('input', {bubbles: true}))
@@ -58,54 +66,76 @@ export function portal(action, data) {
   }
 
   if (action === 'navigate') {
+    if ((location.pathname === '/login.html' || inlineLogin()) &&
+        all('.hd-message, [role=alert], .hd-dialog').some(node => /网络(?:异常|错误|连接失败)/.test(normalize(node.textContent))))
+      return 'login-network-error'
     if (location.pathname === '/login.html') return 'login'
-    if (location.pathname === '/account.html') return 'home'
+    if (location.pathname === '/account.html') {
+      if (document.readyState !== 'complete') return 'waiting'
+      return missingSession() ? 'registration-session-missing' : 'home'
+    }
     if (stage === 'identity') {
       const applicant = one(exact('我是申请人', all('h2')))
-      if (applicant) applicant.click()
+      if (applicant && !data.observingLogin) applicant.click()
       return 'identity'
     }
+    if (stage === 'application' &&
+        (!findControls(['软件全称', '软件名称']).length || !findControls(['版本号', '软件版本号', '软件版本']).length))
+      return 'form-loading'
     if (['application','development','features','confirm'].includes(stage)) return stage
     if (!location.hash.startsWith('#/registerSoft')) {
-      if (location.hash === '#/index' && leaf('跳过')) {
+      if (location.hash === '#/index' && !data.observingLogin && leaf('跳过')) {
         leaf('跳过').click()
         return 'guide'
       }
       if (location.hash === '#/index') return 'home'
       return 'waiting'
     }
-    if (data.openedEntry) return 'waiting'
-    const title = one(exact('计算机软件著作权登记申请', all('h1,h2,h3,h4')))
-    const entry = title && one(exact('立即登记', all('button', title.closest('td') || title.parentElement)))
-    if (!entry) return 'waiting'
-    if (leaf('登录') && !leaf('用户中心')) return 'login-required'
+    if (inlineLogin()) return 'inline-login'
+    if (all('.hd-dialog, [role=dialog]').length) return 'registration-dialog'
+    if (missingSession()) return 'registration-session-missing'
+    const cards = all('.register-soft .link-box, td').filter(card =>
+      exact('R11', all('.img-box',card)).length ||
+      exact('计算机软件著作权登记申请',all('h1,h2,h3,h4',card)).length
+    )
+    const entry = one([...new Set(cards.flatMap(card => exact('立即登记',all('button',card))))])
+    if (!entry || entry.disabled) return 'registration-unavailable'
+    if (data.waitForEntry || data.observingLogin) return 'registration-wait'
     entry.click()
     return 'opened'
   }
 
+  if (action === 'registration-list') {
+    if (location.pathname !== '/account.html' &&
+        !(location.pathname === '/registration.html' && location.hash === '#/index')) return false
+    location.assign('/registration.html#/registerSoft')
+    return true
+  }
+
   if (action === 'login') {
-    if (location.pathname !== '/login.html') return false
+    const root = location.pathname === '/login.html' ? document : inlineLogin()
+    if (!root) return false
     if (data.stage === 'organization') {
-      const organization = leaf('机构') || leaf('机构用户')
+      const organization = leaf('机构',root) || leaf('机构用户',root)
       if (!organization) return false
       organization.click()
       return true
     }
     if (data.stage === 'administrator') {
-      const administrator = leaf('管理员') || leaf('机构管理员')
+      const administrator = leaf('管理员',root) || leaf('机构管理员',root)
       if (!administrator) return false
       administrator.click()
       return true
     }
     if (data.stage === 'password-mode') {
-      const passwordLogin = leaf('密码登录')
+      const passwordLogin = leaf('密码登录',root)
       if (!passwordLogin) return false
       passwordLogin.click()
       return true
     }
-    const password = one(all('input[type=password]'))
-    const account = one(all('input').filter(node => /用户名|账号|手机号|邮箱/.test(node.placeholder)))
-    const submit = one(exact('立即登录', all('button')))
+    const password = one(all('input[type=password]',root))
+    const account = one(all('input',root).filter(node => /用户名|账号|手机号|邮箱/.test(node.placeholder)))
+    const submit = one(exact('立即登录', all('button',root)))
     if (!password || !account || !submit) return false
     return setValue(account, data.username) && setValue(password, data.password) && (submit.click(), true)
   }
@@ -273,8 +303,8 @@ export function officialMacro(project, ticket, viewer, origin) {
       command('selectFrame', 'relative=top'),
       command('executeScript', 'const panel = document.getElementById("official-live"); return panel?.dataset.officialView === ' + JSON.stringify(viewer) + ' ? panel.dataset.officialState : "done";', 'officialState'),
       command('if', '${officialState} === "running"'),
-      command('selectFrame', 'id=official-browser'),
       command('store', 'true', '!errorIgnore'),
+      command('selectFrame', 'id=official-browser'),
       command('executeScript', evaluateFrame, 'officialStep'),
       command('store', 'false', '!errorIgnore'),
       command('end'),

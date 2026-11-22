@@ -18,7 +18,7 @@ const nav=[{name:'软著项目管理',icon:Layers,items:[['overview','软著查�
 nav.push({name:'管理页面',icon:ShieldCheck,items:[['users','人员管理',Menu],['reviews','审核管理',ShieldCheck],['official-account','官网账号',Globe]]})
 const visibleNav=computed(()=>nav.filter(n=>n.name!=='管理页面'||user.value?.role==='admin'))
 const expanded=ref(nav.map(n=>n.name))
-const reviewTarget=ref(null),manualEntry=ref('source')
+const reviewTarget=ref(null)
 const titles={users:'人员管理',reviews:'审核管理','official-account':'官网账号',overview:'软著查阅',records:'申报记录',basic:'基础信息填报',attachments:'附件资料',source:'操作手册生成',rpa:'官网自动申报'}
 const parent=computed(()=>nav.find(n=>n.items.some(i=>i[0]===route.value))?.name||'软著项目管理')
 function notify(text,error=false){const id=Date.now()+Math.random();toasts.value.push({id,text,error});setTimeout(()=>toasts.value=toasts.value.filter(t=>t.id!==id),5000)}
@@ -39,7 +39,7 @@ function openTask(n){
  if(user.value.role==='admin'){
   if(navigate('reviews')){reviewTarget.value=n;modal.value=''}
  }else{
-  modal.value='';manualEntry.value=n.kind==='manual'?'manual':'source';selectProject(n.projectId,({manual:'source',source:'attachments',ownership:'attachments'})[n.kind]||'basic')
+  modal.value='';selectProject(n.projectId,({manual:'source',source:'attachments',ownership:'attachments'})[n.kind]||'basic')
  }
 }
 const formPage=ref(null)
@@ -57,12 +57,6 @@ function receiveRefresh(saved){
  else if(!saved)refresh()
  updateNotifications()
 }
-function handleWorkflowMessage(e){
- if(e.origin!==location.origin||e.source!==document.querySelector('.workflow-frame')?.contentWindow)return
- if(e.data?.type==='workspace-toast')notify(e.data.text,e.data.error)
- if(e.data?.type==='workspace-manual-submitted')updateNotifications()
-}
-window.addEventListener('message',handleWorkflowMessage)
 window.addEventListener('session-expired',()=>{user.value=null;project.value=null;projects.value=[]})
 window.addEventListener('beforeunload',e=>{if(dirty.value){e.preventDefault();e.returnValue=''}})
 function syncRoute(){const r=location.hash.slice(1);route.value=canNavigate(r)?r:'overview'}
@@ -85,7 +79,7 @@ onMounted(async()=>{try{user.value=await api('/auth/me');await refresh()}catch{}
    <FormPage ref="formPage" v-if="route==='basic'" :key="project.id" :project="project" :user="user" :projects="projects" @dirty="dirty=$event" @refresh="receiveRefresh" @notify="notify"/>
    <AttachmentsPage v-else-if="route==='attachments'" :key="project.id" :project="project" @refresh="receiveRefresh" @notify="notify"/>
    <RecordsPage v-else-if="route==='records'" :key="project.id" :project="project" :user="user" @refresh="receiveRefresh" @notify="notify"/>
-   <ManualPage v-else-if="route==='source'" :key="project.id+manualEntry" :project="project" :user="user" :edit-first="manualEntry==='manual'" @refresh="receiveRefresh" @notify="notify"/>
+   <ManualPage v-else-if="route==='source'" :key="project.id" :project="project" :user="user" @refresh="receiveRefresh" @notify="notify"/>
    <ApplicationPage v-else-if="route==='rpa'" :key="project.id" :project="project" @notify="notify" @navigate="navigate"/>
   </template>
   <section v-else class="panel empty"><FolderOpen :size="32"/><strong>请先创建或选择软著项目</strong><button class="btn btn-primary" @click="editProject()">新建软著项目</button></section>

@@ -29,4 +29,4 @@ if __name__ == "__main__":
                             env={**os.environ, "MYSQL_PWD": env.get("DB_PASSWORD", "")})
     if result.returncode:
         raise SystemExit(result.returncode)
-    print("生产建表SQL执行完成：copyright_workspace / V006")
+    print("生产建表SQL执行完成：copyright_workspace / V007")

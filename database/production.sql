@@ -1,5 +1,5 @@
 -- 生产环境完整建表入口，MySQL 8.0+，UTF8MB4。
--- 最新结构版本：2026-11-20 / V005。
+-- 最新结构版本：2026-11-21 / V007。
 -- 本文件只创建缺失结构，不删除现有业务数据；重复执行安全。
 -- 升级现有数据库时须另执行 database/migrations/ 中相应的增量脚本。
 CREATE DATABASE IF NOT EXISTS copyright_workspace CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -164,6 +164,7 @@ INSERT IGNORE INTO schema_versions(version,description) VALUES('V001','项目、
 CREATE TABLE IF NOT EXISTS project_manuals (
   project_id VARCHAR(40) PRIMARY KEY,
   chapters JSON NOT NULL,
+  attachment_id VARCHAR(36) NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'draft',
   revision INT NOT NULL DEFAULT 1,
   comment TEXT NOT NULL,
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS project_manuals (
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   FOREIGN KEY (project_id) REFERENCES projects(id),
   FOREIGN KEY (updated_by) REFERENCES users(id),
+  CONSTRAINT fk_project_manual_attachment FOREIGN KEY (attachment_id) REFERENCES attachments(id),
   CHECK (status IN ('draft','submitted','returned','approved'))
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS manual_reviews (
@@ -178,12 +180,14 @@ CREATE TABLE IF NOT EXISTS manual_reviews (
   project_id VARCHAR(40) NOT NULL,
   revision INT NOT NULL,
   chapters JSON NOT NULL,
+  attachment_id VARCHAR(36) NULL,
   status VARCHAR(20) NOT NULL,
   comment TEXT NOT NULL,
   reviewer_id VARCHAR(36) NOT NULL,
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   FOREIGN KEY (project_id) REFERENCES projects(id),
-  FOREIGN KEY (reviewer_id) REFERENCES users(id)
+  FOREIGN KEY (reviewer_id) REFERENCES users(id),
+  CONSTRAINT fk_manual_review_attachment FOREIGN KEY (attachment_id) REFERENCES attachments(id)
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO schema_versions(version,description) VALUES('V002','流式附件、手册审核与审核历史');
 CREATE TABLE IF NOT EXISTS manual_capture_settings (
@@ -231,3 +235,4 @@ CREATE TABLE IF NOT EXISTS official_credentials (
 ) ENGINE=InnoDB;
 
 INSERT IGNORE INTO schema_versions(version,description) VALUES('V006','官网机构账号加密配置');
+INSERT IGNORE INTO schema_versions(version,description) VALUES('V007','操作手册最终文件送审');

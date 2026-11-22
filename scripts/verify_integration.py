@@ -26,6 +26,9 @@ stored_files = []
 checks = 0
 seen = []
 force_vision_rejection = threading.Event()
+stall_review = threading.Event()
+review_is_stalled = threading.Event()
+release_review = threading.Event()
 server = None
 
 
@@ -70,6 +73,12 @@ class Provider(BaseHTTPRequestHandler):
                 jpeg = base64.b64decode(image_url.split(',', 1)[1], validate=True)
                 assert jpeg.startswith(b'\xff\xd8') and jpeg.endswith(b'\xff\xd9')
                 data = json.loads(user_content[0]['text'])
+                if data['target'] == '资料管理' and stall_review.is_set():
+                    stall_review.clear()
+                    review_is_stalled.set()
+                    release_review.wait(timeout=20)
+                    self.close_connection = True
+                    return
             else:
                 data = json.loads(user_content)
             content = json.dumps(manual_response(task, data), ensure_ascii=False)
@@ -278,7 +287,6 @@ def start_manual_from_folder(client, project_id):
             page = project_page(browser, client, project_id, 'source')
             page.get_by_role('button', name='选择路径', exact=True).wait_for()
             start = page.get_by_role('button', name='开始分析', exact=True)
-            generate = page.get_by_role('button', name='生成截图计划')
             expect(start.is_disabled(), 'analysis requires a source selection')
             project_path = f'/projects/{project_id}'
             source_zip = Path(tmp) / '直接上传.zip'
@@ -310,21 +318,31 @@ def start_manual_from_folder(client, project_id):
             spinner.wait_for()
             expect(spinner.evaluate("el => getComputedStyle(el).animationName") == 'manual-spin',
                    'manual progress animates while the task runs')
-            logs = page.get_by_role('complementary', name='解析日志')
+            panels = page.locator('.manual-analysis-panel')
+            logs = panels.filter(has=page.get_by_text('解析日志', exact=True))
+            results = panels.filter(has=page.get_by_text('分析结果', exact=True))
+            expect(panels.count() == 2 and page.locator('.manual-analysis-panel[open]').count() == 0
+                   and page.get_by_role('button', name='编辑与送审', exact=True).count() == 0,
+                   'results and logs share a collapsed layout and the legacy editor is absent')
+            logs.locator('summary').click()
             logs.get_by_text('{"fronte', exact=True).wait_for()
             expect(logs.get_by_text('接收中…', exact=True).is_visible(), 'partial model content appears before the reply completes')
+            results.locator('summary').first.click()
+            page.get_by_text('前端分析 ·', exact=False).click()
+            page.get_by_text('后端分析 ·', exact=False).click()
             page.get_by_text('index.html 含项目首页、资料管理和版本详情对话框。', exact=True).wait_for()
             page.get_by_text('ProjectController.java 声明了项目控制器。', exact=True).wait_for()
             spinner.wait_for(state='hidden')
             expect('PRIVATE_MODEL_REASONING' not in logs.inner_text() and '前端源码分析' in logs.inner_text(),
                    'manual log retains model replies without private reasoning content')
-            expect(generate.is_disabled(), 'manual source analysis can finish before browser confirmation')
+            expect(page.get_by_role('button', name='生成截图计划', exact=True).count() == 0,
+                   'screenshot planning has no manual start button')
             expect(page.get_by_text('保存测试站点入口并勾选 Chrome 确认后', exact=False).is_visible()
                    and page.locator('.manual-phases .done').get_by_text('源码分析').is_visible(),
                    'completed source analysis shows what is needed to resume')
             ready = page.get_by_role('checkbox', name='已在 Google Chrome 中打开测试站点', exact=False)
             help_button = page.get_by_role('button', name='查看开发者模式打开方式')
-            guide_panel = page.locator('dialog.manual-guide')
+            guide_panel = page.locator('dialog[aria-labelledby="manual-guide-title"]')
             assert not guide_panel.is_visible(), 'tutorial stays hidden before opening'
             help_button.click()
             guide = page.get_by_role('dialog', name='打开 Chrome 开发者工具')
@@ -403,7 +421,11 @@ def verify_workspace_ui(client, project_id):
             box = toast.bounding_box()
             expect(box['y'] < 80 and abs(box['x'] + box['width'] / 2 - 720) < 5, 'toast appears centered at the top')
             page.goto(origin + '/#source')
-            page.get_by_role('link', name='下载 Word 手册').wait_for()
+            toolbar = page.get_by_role('group', name='手册生成操作')
+            toolbar.get_by_role('button', name='下载 Word 手册').wait_for()
+            expect(toolbar.get_by_role('link', name='下载截图计划').count() == 0
+                   and toolbar.get_by_role('button', name='重置状态').is_visible(),
+                   'the Word download appears beside reset without a screenshot-plan download')
             page.set_viewport_size({'width': 390, 'height': 844})
             expect(page.get_by_role('heading', name='解析进程').is_visible() and page.get_by_label('当前项目').is_visible()
                    and page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'manual generation and selector fit a mobile viewport')
@@ -438,13 +460,18 @@ def verify_review_ui(admin, project_id):
             browser.close()
 
 
-def verify_official_macro(page, macro):
+def verify_official_macro(page, macro, configured, session_failure=None):
     data = {
         'fullName':'测试软件','version':'V2.0','shortName':'测试','rights':'全部权利',
         'devFinish':'2025-06-01','devCPU':'测试型号','devRAM':'16 GB',
         'runCPU':'运行型号','runRAM':'8 GB','languages':'Java,Python'
     }
     portal_html = """<meta charset="utf-8"><body><script>
+        const sessionKey = '__fixture_session__';
+        const testRetry = sessionKey.endsWith('_False');
+        const blockedSession = sessionKey.endsWith('_blocked');
+        const rejectedSession = sessionKey.endsWith('_rejected');
+        window.getCookie = () => !blockedSession && !!sessionStorage[sessionKey];
         const pages = {
           application: `
             <section class="fillin_item"><h3>软件全称</h3><input id="name"></section>
@@ -475,38 +502,73 @@ def verify_official_macro(page, macro):
             if (stage==='features') history.replaceState(null,'','#/confirm');
           };
         }
-        if (location.pathname==='/registration.html') {
-          document.body.innerHTML=(sessionStorage.signedIn?'<span>用户中心</span>':'<span>登录</span>')+
-            '<table><tr><td><h1>计算机软件著作权登记申请</h1><button>立即登记</button></td></tr></table>';
-          document.querySelector('button').onclick=()=>{location.href='/r11.html#/identity'};
-        } else if(location.pathname==='/login.html') {
-          document.body.innerHTML='<button id="org">机构</button><div id="login"></div>';
-          document.querySelector('#org').onclick = () => {
-            document.querySelector('#login').innerHTML='<span>管理员</span><span>密码登录</span>'+
+        function renderLogin(root, onVerified) {
+          root.innerHTML='<button id="org">机构</button><div id="login"></div>';
+          root.querySelector('#org').onclick = () => {
+            root.querySelector('#login').innerHTML='<span>管理员</span><span>密码登录</span>'+
               '<input placeholder="请输入账号"><input type="password"><button id="submit">立即登录</button>';
-            document.querySelector('#submit').onclick=()=>{
-              const [username,password]=document.querySelectorAll('input');
+            root.querySelector('#submit').onclick=()=>{
+              const [username,password]=root.querySelectorAll('input');
               if (username.value==='fixture-admin' && password.value==='fixture-password') {
-                // The real site requires a human to complete this handoff.
-                document.querySelector('#login').innerHTML='<button id="verify">人工安全验证</button>';
-                document.querySelector('#verify').onclick=()=>{
-                  sessionStorage.signedIn='yes';
-                  location.href='/account.html';
+                if (testRetry && !sessionStorage[sessionKey+'NetworkError']) {
+                  sessionStorage[sessionKey+'NetworkError']='yes';
+                  const error = document.createElement('div');
+                  error.className='hd-message';
+                  error.textContent='网络异常请刷新页面后重试';
+                  root.append(error);
+                  return;
+                }
+                root.querySelector('#login').innerHTML='<button id="verify">人工安全验证</button>';
+                root.querySelector('#verify').onclick=()=>{
+                  sessionStorage[sessionKey]=Date.now();
+                  onVerified();
                 };
               }
             };
           };
+        }
+        if (location.pathname==='/registration.html') {
+          function recordEarlyNavigation() {
+            if (sessionStorage[sessionKey] && Date.now()-Number(sessionStorage[sessionKey])<5000)
+              sessionStorage[sessionKey+'Early']='yes';
+          }
+          recordEarlyNavigation();
+          document.body.innerHTML='<span>登录</span>'+
+            '<main class="register-soft"><div class="link-box"><div class="img-box">R11</div><button id="r11">立即登记</button></div>'+
+            '<div class="link-box"><div class="img-box">R21</div><button id="r21">立即登记</button></div></main>';
+          let clicks = 0;
+          document.querySelector('#r11').onclick=()=>{
+            recordEarlyNavigation();
+            if (!sessionStorage[sessionKey] || rejectedSession) {
+              if (testRetry) {location.href='/login.html';return;}
+              const modal = document.createElement('div');
+              modal.className='lg_hd_dialog_warp';
+              modal.innerHTML='<div class="hd-dialog"></div>';
+              document.body.append(modal);
+              renderLogin(modal.querySelector('.hd-dialog'),()=>modal.remove());
+              return;
+            }
+            if (++clicks===1 && testRetry) return;
+            location.href='/r11.html#/identity';
+          };
+        } else if(location.pathname==='/login.html') {
+          renderLogin(document.body,()=>{location.href='/account.html'});
         } else if(location.pathname==='/r11.html') {
           document.body.innerHTML='<h2>我是申请人</h2>';
-          document.querySelector('h2').onclick=()=>render('application');
+          document.querySelector('h2').onclick=()=>{
+            history.replaceState(null,'','#/application');
+            document.body.innerHTML='<p>表单加载中</p>';
+            setTimeout(()=>render('application'),250);
+          };
         }
-      </script>"""
+      </script>""".replace('__fixture_session__', f'fixture_signed_in_{session_failure or configured}')
     def serve_portal(route):
         route.fulfill(content_type='text/html',body=portal_html)
     def serve_payload(route):
         redeemed = route.fetch()
         assert redeemed.ok, 'the actual launch endpoint validates the ticket'
-        route.fulfill(json={'form':data,'login':{'username':'fixture-admin','password':'fixture-password'}})
+        account = {'username':'fixture-admin','password':'fixture-password'} if configured else {}
+        route.fulfill(json={'form':data,'login':account})
 
     page.context.route('https://register.ccopyright.com.cn/**',serve_portal)
     page.context.route('**/official-application/consume',serve_payload)
@@ -514,11 +576,28 @@ def verify_official_macro(page, macro):
         setup = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialStarted')
         tick = next(cmd['Target'] for cmd in macro['Commands'] if cmd['Value']=='officialStep')
         expect('fixture-password' not in str(macro), 'the browser macro stores no credentials')
+        viewer = page.locator('#official-browser')
+        def click_portal(control):
+            control.scroll_into_view_if_needed()
+            relative = control.evaluate("""el => {
+                const r = el.getBoundingClientRect();
+                return [(r.left+r.width/2)/innerWidth, (r.top+r.height/2)/innerHeight];
+            }""")
+            bounds = viewer.bounding_box()
+            page.mouse.click(bounds['x'] + relative[0]*bounds['width'],
+                             bounds['y'] + relative[1]*bounds['height'])
         page.evaluate('code => new Function(code)()',setup)
         page.wait_for_selector('#official-live[data-official-state=running]',state='attached')
+        expect(viewer.get_attribute('src')=='https://register.ccopyright.com.cn/login.html',
+               'the official application opens the formal login page first')
         frame = page.frame_locator('#official-browser')
         manual = False
-        for _ in range(90):
+        entered_credentials = False
+        reloaded_login = False
+        waited_after_login = False
+        for _ in range(260):
+            if '等待 5 秒' in page.locator('#official-live [role=status]').inner_text():
+                waited_after_login = True
             portal_frame = next((item for item in page.frames if item.url.startswith('https://register.ccopyright.com.cn/')), None)
             if portal_frame:
                 try:
@@ -526,21 +605,64 @@ def verify_official_macro(page, macro):
                 except Exception as error:
                     if 'Execution context was destroyed' not in str(error):
                         raise
+            retry_login = page.get_by_role('button',name='重新加载官网登录页')
+            if not configured and not reloaded_login and retry_login.is_visible():
+                retry_login.click()
+                reloaded_login = True
+                entered_credentials = False
+            if not configured and not entered_credentials and frame.locator('#org').is_visible():
+                pending = page.locator('#official-live [role=status]')
+                if '登录' in pending.inner_text() and '下方' in pending.inner_text():
+                    click_portal(frame.locator('#org'))
+                    frame.get_by_placeholder('请输入账号').fill('fixture-admin')
+                    frame.locator('input[type=password]').fill('fixture-password')
+                    click_portal(frame.locator('#submit'))
+                    entered_credentials = True
             if frame.locator('#verify').is_visible():
                 expect('安全验证' in page.locator('#official-live [role=status]').inner_text(),
                        'the workbench keeps the actual verification controls interactive')
-                frame.get_by_role('button',name='人工安全验证').click()
+                click_portal(frame.get_by_role('button',name='人工安全验证'))
                 manual = True
             if page.locator('#official-live').get_attribute('data-official-state')=='done':
                 break
             page.wait_for_timeout(70)
-        expect(manual and '已填写' in page.locator('#official-live [role=status]').inner_text(),
-               'the macro waits for the operator and fills all three R11 stages')
+        status = page.locator('#official-live [role=status]').inner_text()
+        if session_failure:
+            message = '未读取到登录会话' if session_failure == 'blocked' else '再次要求登录'
+            expect(manual and waited_after_login and message in status and
+                   page.locator('#official-live').get_attribute('data-official-state') == 'done',
+                   'the macro stops when the official login session is missing or rejected')
+            if session_failure == 'blocked':
+                expect(any(item.url.endswith('/account.html') for item in page.frames),
+                       'an account page without a cookie does not trigger navigation to R11')
+            recovery = page.get_by_role('link', name='在新标签页打开官网')
+            expect(recovery.get_attribute('href') == 'https://register.ccopyright.com.cn/login.html' and
+                   recovery.get_attribute('target') == '_blank',
+                   'the recovery link opens the official login as a top-level page')
+            return
+        expect((configured or entered_credentials) and manual and '已填写' in status,
+               f'the macro resumes after login across all three R11 stages (configured={configured}, status={status})')
+        expect(configured or reloaded_login, 'an official login network warning can be retried inside the same workbench run')
+        expect(waited_after_login and frame.locator('body').evaluate(
+            "() => !sessionStorage.fixture_signed_in_TrueEarly && !sessionStorage.fixture_signed_in_FalseEarly"),
+            'the macro waits five seconds after verification before reopening registration or clicking R11')
         expect(frame.locator('#dev').input_value()=='CPU 测试型号，内存 16 GB' and
                frame.locator('#run').input_value()=='CPU 运行型号，内存 8 GB' and
                frame.locator('#java').is_checked() and frame.locator('#python').is_checked(),
                'operator can see the written fields in the live browser frame')
         expect(any(item.url.endswith('#/features') for item in page.frames), 'the macro stops before confirmation')
+        expect(viewer.get_attribute('src')=='https://register.ccopyright.com.cn/login.html',
+               'login and registration navigation stay within the original official frame')
+        original_viewport = page.viewport_size
+        page.set_viewport_size({'width': 390, 'height': 844})
+        page.wait_for_function("""() => {
+            const iframe = document.querySelector('#official-browser');
+            const viewport = iframe.parentElement;
+            return iframe.offsetWidth >= 1280 &&
+                Math.abs(iframe.getBoundingClientRect().width - viewport.clientWidth) <= 1;
+        }""")
+        page.set_viewport_size(original_viewport)
+
     finally:
         page.context.unroute('https://register.ccopyright.com.cn/**',serve_portal)
         page.context.unroute('**/official-application/consume',serve_payload)
@@ -566,13 +688,14 @@ def verify_application_ui(client, admin, project_id):
                 }
             """)
             initial_url = page.url
-            for attempt in range(2):
+            for attempt, failure in enumerate((None, None, 'blocked', 'rejected')):
                 page.evaluate('window.launchMacro = null')
                 page.get_by_role('button', name='启动申报', exact=True).click()
                 page.wait_for_function('window.launchMacro !== null')
                 expect(page.url == initial_url and len(page.context.pages)==1 and
                        page.locator('#official-live #official-browser').count()==1,
-                       'starting leaves the interactive official frame on the original workspace page')
+                       f'starting leaves the interactive official frame on the original workspace page (run {attempt + 1}, '
+                       f'url={page.url}, initial={initial_url}, tabs={len(page.context.pages)})')
                 macro = page.evaluate('window.launchMacro')
                 select_window, wait_for_panel = macro['Commands'][:2]
                 expect(select_window['Target'] == 'title=' + page.title()
@@ -580,8 +703,7 @@ def verify_application_ui(client, admin, project_id):
                        'Ui.Vision targets the active workbench tab and its launch panel')
                 expect(macro['Name'] == 'Copyright_R11_Fill' and any(cmd['Command']=='selectFrame' for cmd in macro['Commands'])
                        and '联调验证项目' not in str(macro), 'application button launches a reusable macro without saved form data')
-                if attempt == 0:
-                    verify_official_macro(page, macro)
+                verify_official_macro(page, macro, configured=attempt != 1, session_failure=failure)
             page.set_viewport_size({'width': 390, 'height': 844})
             expect(page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'application preview fits a mobile viewport')
             expect(page.get_by_role('heading', name='申报页面', exact=True).count() == 0
@@ -799,19 +921,23 @@ try:
     request(office, 'POST', jobs, expected=422, json={**job_body, 'browserReady': False})
     request(office, 'POST', jobs, expected=422, json={**job_body, 'url': 'https://example.invalid/'})
     start_index = len(seen)
+    vision_start = len(seen)
+    stall_review.set()
     job = start_manual_from_folder(office, pid)
     job_path = jobs + '/' + job['id']
+    assert review_is_stalled.wait(timeout=20), 'the second page review did not start'
     request(research, 'GET', job_path, expected=404)
     expect(request(research, 'GET', jobs).json()['job'] is None, 'manual jobs are scoped to project and owner')
-    planned = await_job(office, job_path, 'review')
+    planned = request(office, 'GET', job_path).json()
     selection = planned['result']['sourceSelection']
     expect(selection['candidates'] == 3
            and selection['groups']['frontend']['readPaths'] == ['项目样例/index.html']
            and selection['groups']['backend']['readPaths'] == ['项目样例/backend/ProjectController.java'],
            'folder paths are preserved and frontend and backend files are analyzed separately')
-    request(office, 'GET', job_path + '/word', expected=404)
+    request(office, 'POST', job_path + '/word', expected=404, json={'acknowledged': True})
     plan = request(office, 'GET', job_path + '/plan').json()
-    expect(len(plan['shots']) == 6 and 'captured' not in planned['result'], 'the plan covers all candidate targets before confirmation')
+    expect(len(plan['shots']) == 6 and any(e['text'] == '截图计划已生成，正在打开测试站点。' for e in planned['events']),
+           'the generated plan automatically starts browser capture')
     expect(plan['skipped'] == planned['result']['skippedShots']
            and plan['skipped'][0]['operationId'] == 'log-detail'
            and any(o['id'] == 'log-detail' and not o['capture'] for o in planned['result']['operations']),
@@ -821,18 +947,24 @@ try:
     request(admin,'PUT',settings,json={'url':''})
     request(office, 'POST', job_path + '/capture', expected=409)
     request(admin,'PUT',settings,json={'url':job_body['url']})
-    force_vision_rejection.set()
     try:
-        request(office, 'POST', job_path + '/capture')
-        rejected = await_job(office, job_path, 'failed')
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(**chrome_executable())
+            try:
+                page = project_page(browser, office, pid, 'source')
+                with page.expect_response(lambda response: response.url.endswith(job_path + '/capture')
+                                          and response.request.method == 'POST') as response:
+                    page.get_by_role('button', name='重试当前步骤').click()
+                assert response.value.ok, response.value.text()
+                resumed = response.value.json()
+                expect(resumed['status'] == 'running' and resumed['result']['captured'] == 1
+                       and '保留 1 张' in resumed['events'][-1]['text'],
+                       'retry cancels an active capture and preserves approved images')
+            finally:
+                browser.close()
     finally:
-        force_vision_rejection.clear()
-    expect('没有截图通过核验' in rejected['error'] and not rejected['result'].get('captured')
-           and any('复核仍未通过' in shot['reason'] for shot in rejected['result']['failedShots']),
-           'all failed screenshots are recorded and no document is generated without any approved image')
-    request(office, 'GET', job_path + '/word', expected=404)
-    vision_start = len(seen)
-    request(office, 'POST', job_path + '/capture')
+        release_review.set()
     finished = await_job(office, job_path, 'complete')
     expect(finished['result']['captured'] == 3 and {e['stage'] for e in finished['events']} == set(range(6)),
            'all six stages report progress and real browser screenshots')
@@ -845,23 +977,27 @@ try:
            'a shot that fails every review is logged and does not block exporting the approved shots')
     expect(all(payload['model'] == cfg['model'] and payload['reasoning_effort'] == cfg['reasoning_effort']
                for _, payload in seen[start_index:]), 'manual model calls use the configured assistant model and effort')
-    word = request(office, 'GET', job_path + '/word')
+    request(office, 'GET', job_path + '/word', expected=428)
+    request(office, 'POST', job_path + '/word', expected=428, json={'acknowledged': False})
+    word = request(office, 'POST', job_path + '/word', json={'acknowledged': True})
     from docx import Document
     doc = Document(io.BytesIO(word.content))
     expect(len(doc.inline_shapes) == 3 and len(doc.sections) == 2 and '版本详情' in '\n'.join(p.text for p in doc.paragraphs),
            'downloaded Word preserves template sections and embeds each real JPEG')
-    expect(all('服务异常页' not in p.text and '异常界面' not in p.text for p in doc.paragraphs),
-           'the generated manual omits unreachable pages and their empty sections')
+    captions = [p.text for p in doc.paragraphs if '待补截图' in p.text]
+    expect(len(captions) == 3 and any('服务异常页' in p and '服务遇到异常' in p for p in captions)
+           and any('异常详情' in p for p in captions) and any('版本详情补充视图' in p for p in captions),
+           'the manual keeps sections and labels blank placeholders for missing page and operation images')
     reviews = [payload['messages'][-1]['content'] for _, payload in seen[vision_start:]
                if payload['messages'][0]['content'].startswith('操作手册任务：截图核验。')]
     requests = [json.loads(parts[0]['text']) for parts in reviews]
     expect([(item['target'], item['attempt'], item['viewport']) for item in requests] ==
-           [('项目首页', 1, 'default'), ('资料管理', 1, 'default'), ('查看版本详情', 1, 'default'),
+           [('项目首页', 1, 'default'), ('资料管理', 1, 'default'), ('资料管理', 1, 'default'), ('查看版本详情', 1, 'default'),
             ('查看版本详情', 2, 'wide'), ('版本详情补充视图', 1, 'default'),
             ('版本详情补充视图', 2, 'wide'), ('版本详情补充视图', 3, 'focus')],
            'rejected screenshots get bounded retakes and subsequent approved screenshots are retained')
     rejected_image, approved_image = [base64.b64decode(parts[1]['image_url']['url'].split(',', 1)[1])
-                                      for parts in reviews[2:4]]
+                                      for parts in reviews[3:5]]
     with zipfile.ZipFile(io.BytesIO(word.content)) as archive:
         media = [archive.read(name) for name in archive.namelist() if name.startswith('word/media/')]
     expect(approved_image in media and rejected_image not in media and approved_image != rejected_image,
@@ -877,7 +1013,36 @@ try:
         browser = playwright.chromium.launch(**chrome_executable())
         try:
             page = project_page(browser, office, pid, 'source')
-            page.get_by_role('link', name='下载 Word 手册').wait_for()
+            toolbar = page.get_by_role('group', name='手册生成操作')
+            download = toolbar.get_by_role('button', name='下载 Word 手册')
+            download.wait_for()
+            expect(toolbar.get_by_role('button', name='上传并送审').count() == 0,
+                   'submission upload becomes available only after the reference download')
+            download.click()
+            declaration = page.get_by_role('dialog', name='确认手册用途')
+            expect(declaration.get_by_text('我已确认，AI 生成的内容不可用于软著申请，此次生成仅用作参考内容。').is_visible(),
+                   'download asks the user to acknowledge reference-only use')
+            with page.expect_download() as download_event:
+                declaration.get_by_role('button', name='确认下载').click()
+            assert download_event.value.suggested_filename == '操作手册.docx'
+            with page.expect_file_chooser() as chooser:
+                toolbar.get_by_role('button', name='上传并送审').click()
+            final_word = Document()
+            final_word.add_paragraph('人工编辑后的最终操作手册')
+            final_bytes = io.BytesIO()
+            final_word.save(final_bytes)
+            chooser.value.set_files({'name': '操作手册最终版.docx',
+                                     'mimeType': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                                     'buffer': final_bytes.getvalue()})
+            page.get_by_text('已上传 操作手册最终版.docx，待送审').wait_for()
+            expect(request(office, 'GET', f'/projects/{pid}/manual').json()['status'] != 'submitted',
+                   'upload alone does not submit the final file')
+            with page.expect_response(lambda response: response.url.endswith('/manual/submit')
+                                      and response.request.method == 'POST') as submitted:
+                toolbar.get_by_role('button', name='送审', exact=True).click()
+            assert submitted.value.ok, submitted.value.text()
+            final_manual = submitted.value.json()
+            assert final_manual['status'] == 'submitted' and final_manual['attachmentName'] == '操作手册最终版.docx'
             with page.expect_response(lambda response: response.url.endswith('/manual-jobs/reset')
                                       and response.request.method == 'POST') as response:
                 page.get_by_role('button', name='重置状态').click()
@@ -885,11 +1050,20 @@ try:
             page.get_by_text('暂无解析任务', exact=True).wait_for()
             page.reload()
             page.get_by_text('暂无解析任务', exact=True).wait_for()
-            expect(page.get_by_role('link', name='下载 Word 手册').count() == 0,
+            expect(page.get_by_role('button', name='下载 Word 手册').count() == 0,
                    'reset clears the manual workspace after reload')
         finally:
             browser.close()
-    expect(request(office, 'GET', job_path + '/word').content == word.content
+    manual_review = next(p['manual'] for p in request(admin, 'GET', '/admin/reviews').json() if p['id'] == pid)
+    manual_attachment = f"/projects/{pid}/files/{manual_review['attachmentId']}"
+    expect(manual_review['status'] == 'submitted'
+           and request(admin, 'GET', manual_attachment + '/download').content == final_bytes.getvalue()
+           and any(n['projectId']==pid and n['kind']=='manual' for n in request(admin,'GET','/notifications').json()),
+           'the administrator receives a pending review and can download the uploaded original')
+    request(office, 'DELETE', manual_attachment, expected=409)
+    request(admin, 'POST', f'/projects/{pid}/manual/review',
+            json={'revision': manual_review['revision'], 'status': 'approved'})
+    expect(request(office, 'POST', job_path + '/word', json={'acknowledged': True}).content == word.content
            and request(office, 'GET', settings).json()['url'] == job_body['url'],
            'reset preserves completed files and the saved capture entry')
     attachments = request(office, 'GET', f'/projects/{pid}').json()['files']
@@ -900,6 +1074,18 @@ try:
     expect(request(office, 'GET', active_path).json()['status'] == 'cancelled'
            and request(office, 'GET', jobs).json()['job'] is None,
            'reset stops an active task and does not revive older jobs')
+    force_vision_rejection.set()
+    try:
+        blank_job = request(office, 'POST', jobs, json={**job_body, 'fileId': archive_id}).json()
+        blank_path = jobs + '/' + blank_job['id']
+        await_job(office, blank_path, 'complete')
+    finally:
+        force_vision_rejection.clear()
+    blank_word = request(office, 'POST', blank_path + '/word', json={'acknowledged': True})
+    blank_document = Document(io.BytesIO(blank_word.content))
+    expect(len(blank_document.inline_shapes) == 0
+           and sum('待补截图' in p.text for p in blank_document.paragraphs) == 6,
+           'when every screenshot is missing the Word file contains all six placeholders')
     p = request(admin, "GET", f"/projects/{pid}").json()
     request(admin, "PUT", f"/projects/{pid}", json={**p, "allowedRoles": ["adminDept"]})
     request(research, "GET", f"/projects/{pid}", expected=403)

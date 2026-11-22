@@ -100,9 +100,24 @@ def render_manual(template: Path, output: Path, project, basic, overview, module
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         paragraph.paragraph_format.keep_with_next = True
         paragraph.paragraph_format.first_line_indent = Inches(0)
-        drawing = paragraph.add_run().add_picture(str(images[shot.id]), width=Inches(5.65))
-        drawing._inline.docPr.set('descr', shot.title)
-        caption = doc.add_paragraph(f'图 {figure}  {shot.title}', style='Caption')
+        label = f'图 {figure}  {shot.title}'
+        if shot.id in images:
+            drawing = paragraph.add_run().add_picture(str(images[shot.id]), width=Inches(5.65))
+            drawing._inline.docPr.set('descr', shot.title)
+        else:
+            paragraph.paragraph_format.line_spacing = Inches(1.25)
+            paragraph.add_run('\u00a0')
+            border = OxmlElement('w:pBdr')
+            for side in ('top', 'left', 'bottom', 'right'):
+                edge = OxmlElement('w:' + side)
+                edge.set(qn('w:val'), 'single')
+                edge.set(qn('w:sz'), '4')
+                edge.set(qn('w:color'), 'B8C0CC')
+                border.append(edge)
+            paragraph._p.get_or_add_pPr().insert_element_before(
+                border, 'w:shd', 'w:tabs', 'w:spacing', 'w:ind', 'w:jc')
+            label = f'图 {figure}  {shot.title}（待补截图，画面应显示「{shot.visibleText}」）'
+        caption = doc.add_paragraph(label, style='Caption')
         caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
         caption.paragraph_format.left_indent = Inches(0)
         caption.paragraph_format.first_line_indent = Inches(0)
@@ -114,7 +129,11 @@ def render_manual(template: Path, output: Path, project, basic, overview, module
             for page in (p for p in pages if p.moduleId == module.id):
                 heading(page.title, min(level + 1, 5))
                 doc.add_paragraph(prose[page.id])
-                doc.add_paragraph('进入路径：' + (' → '.join(x.label for x in page.steps) or '初始页面'))
+                page_shot = shot_by_target.get((page.id, None))
+                if page_shot and page_shot.id not in images:
+                    doc.add_paragraph('计划路径：' + (' → '.join(x.label for x in page.steps) or '测试站点入口'))
+                else:
+                    doc.add_paragraph('进入路径：' + (' → '.join(x.label for x in page.steps) or '初始页面'))
                 picture(page)
                 for operation in (o for o in operations if o.pageId == page.id):
                     p = doc.add_paragraph()

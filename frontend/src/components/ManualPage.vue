@@ -1,26 +1,31 @@
 <script setup>
 import {computed, onMounted, onUnmounted, ref, shallowRef, watch} from 'vue'
-import {BookOpen, Camera, ChevronRight, Download, FileArchive, LoaderCircle, Play, RotateCcw, Square} from 'lucide-vue-next'
-import {api} from '../api'
+import {Camera, ChevronRight, Download, FileArchive, LoaderCircle, Play, RotateCcw, Square, Upload} from 'lucide-vue-next'
+import {api, downloadFile, fileUrl, statusName} from '../api'
 import {zipSync} from 'fflate'
 import sourcePolicy from '../../../config/manual-source-policy.json'
 
-const props=defineProps({project:Object,editFirst:Boolean,user:Object})
+const props=defineProps({project:Object,user:Object})
 const emit=defineEmits(['refresh','notify'])
-const view=ref(props.editFirst?'edit':'generate'), job=ref(null), pending=ref(false), ready=ref(false)
+const job=ref(null), pending=ref(false), ready=ref(false)
 const folderInput=ref(null), zipInput=ref(null), localSource=shallowRef(null), archiving=ref(false)
 const uploadingZip=ref('')
 const planning=ref(false)
 const lastPlanJobId=ref(null)
 const devtoolsGuide=ref(null)
+const downloadDialog=ref(null), finalInput=ref(null), finalFile=ref(null)
+const downloading=ref(false), uploadingFinal=ref(false), submitting=ref(false), downloaded=ref(false)
+const manual=ref(null)
 const logPane=ref(null)
 const followLog=ref(true)
 const url=ref(''), savedUrl=ref(''), loadingSettings=ref(true)
 const sourceGroups={frontend:'前端',backend:'后端'}
 const phases=['源码分析','功能目录','页面路径','主要操作','实景截图','Word 手册']
-const stateNames={running:'进行中',source_ready:'源码分析完成',review:'等待截图确认',complete:'已完成',failed:'失败',cancelled:'已停止'}
-const path=computed(()=>`/projects/${encodeURIComponent(props.project.id)}/manual-jobs`)
-const active=computed(()=>['running','review'].includes(job.value?.status))
+const stateNames={running:'进行中',source_ready:'源码分析完成',review:'准备截图',complete:'已完成',failed:'失败',cancelled:'已停止'}
+const projectPath=computed(()=>`/projects/${encodeURIComponent(props.project.id)}`)
+const path=computed(()=>`${projectPath.value}/manual-jobs`)
+const active=computed(()=>job.value?.status==='running')
+const canUploadFinal=computed(()=>downloaded.value||(manual.value?.status==='returned'&&manual.value?.attachmentId))
 const runningStage=computed(()=>{
  if(archiving.value)return 0
  if(planning.value)return 1
@@ -30,13 +35,15 @@ const runningStage=computed(()=>{
 const running=computed(()=>runningStage.value!==null)
 const result=computed(()=>job.value?.result||{})
 const skippedCaptures=computed(()=>[...(result.value.unreachableShots||[]),...(result.value.failedShots||[])])
+const canRetryCapture=computed(()=>job.value?.stage===4&&!!result.value.shots?.length&&
+ ['running','failed','cancelled','review'].includes(job.value.status))
 const modelLogs=computed(()=>job.value?.modelLogs||[])
 const hasResults=computed(()=>result.value.sourceSelection||result.value.modules||result.value.pages||result.value.operations)
 const sourceSelected=computed(()=>Boolean(localSource.value))
 const canGenerate=computed(()=>!sourceSelected.value&&result.value.sourceSelection?.groups?.frontend.readPaths.length>0&&
  (job.value.status==='source_ready'||(job.value.status==='failed'&&job.value.stage>0&&!result.value.shots)))
 const canContinue=computed(()=>canGenerate.value&&ready.value&&!!savedUrl.value&&url.value.trim()===savedUrl.value)
-const nextPlanJob=computed(()=>view.value==='generate'&&!pending.value&&canContinue.value&&job.value?.status==='source_ready'?job.value.id:null)
+const nextPlanJob=computed(()=>!pending.value&&canContinue.value&&job.value?.status==='source_ready'?job.value.id:null)
 let timer, disposed=false, generation=0
 
 watch(nextPlanJob,id=>{
@@ -50,10 +57,59 @@ function phaseDone(stage){
 
 function apply(next){
  if(disposed)return
- if(next?.id!==job.value?.id)followLog.value=true
+ if(next?.id!==job.value?.id){
+  followLog.value=true
+  downloaded.value=Boolean(next?.id&&sessionStorage.getItem(downloadKey(next.id)))
+ }
  job.value=next
  clearTimeout(timer)
  if(next?.status==='running')timer=setTimeout(poll,1000)
+}
+function downloadKey(id){
+ return `manual-download:${props.user.id}:${props.project.id}:${id}`
+}
+async function confirmDownload(){
+ if(downloading.value||job.value?.status!=='complete')return
+ const id=job.value.id
+ downloading.value=true
+ try{
+  await downloadFile(`${path.value}/${id}/word`,{method:'POST',body:{acknowledged:true}},'操作手册.docx')
+  sessionStorage.setItem(downloadKey(id),'1')
+  downloaded.value=true
+  downloadDialog.value?.close()
+ }catch(e){if(!disposed)emit('notify',e.message,true)}
+ finally{downloading.value=false}
+}
+async function uploadFinal(event){
+ const file=event.target.files[0]
+ event.target.value=''
+ if(!file||uploadingFinal.value||submitting.value)return
+ if(!/\.(docx|pdf)$/i.test(file.name)){emit('notify','请选择 Word（.docx）或 PDF 文件。',true);return}
+ const body=new FormData()
+ body.append('file',file)
+ body.append('category','操作手册')
+ uploadingFinal.value=true
+ try{
+  const attachment=await api(`${projectPath.value}/files`,{method:'POST',body})
+  finalFile.value={id:attachment.id,name:file.name}
+  emit('refresh')
+ }catch(e){if(!disposed)emit('notify',e.message,true)}
+ finally{uploadingFinal.value=false}
+}
+async function submitFinal(){
+ if(!finalFile.value||!manual.value||uploadingFinal.value||submitting.value)return
+ submitting.value=true
+ try{
+  manual.value=await api(`${projectPath.value}/manual/submit`,{
+   method:'POST',body:{attachmentId:finalFile.value.id,revision:manual.value.revision}
+  })
+  finalFile.value=null
+  emit('refresh')
+  emit('notify','操作手册已提交管理员审核。')
+ }catch(e){
+  if(e.status===409)manual.value=await api(`${projectPath.value}/manual`).catch(()=>manual.value)
+  if(!disposed)emit('notify',e.message,true)
+ }finally{submitting.value=false}
 }
 function trackLogScroll(event){
  const pane=event.currentTarget
@@ -158,7 +214,9 @@ async function generate(){
 function reset(){
  return command(async()=>{
   if(job.value)await api(`${path.value}/reset`,{method:'POST'})
+  if(job.value)sessionStorage.removeItem(downloadKey(job.value.id))
   localSource.value=null
+  finalFile.value=null
   lastPlanJobId.value=null
   ready.value=false
   followLog.value=true
@@ -174,11 +232,12 @@ const depth=module=>{
  return level
 }
 onMounted(async()=>{
- const results=await Promise.allSettled([api(path.value),api(`${path.value}/settings`)])
+ const results=await Promise.allSettled([api(path.value),api(`${path.value}/settings`),api(`${projectPath.value}/manual`)])
  if(disposed||generation)return
- const [latest, settings]=results
+ const [latest, settings, review]=results
  if(latest.status==='fulfilled')apply(latest.value.job)
  if(settings.status==='fulfilled')url.value=savedUrl.value=settings.value.url
+ if(review.status==='fulfilled')manual.value=review.value
  loadingSettings.value=false
  for(const response of results)if(response.status==='rejected')emit('notify',response.reason.message,true)
 })
@@ -186,39 +245,48 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
 </script>
 
 <template>
- <div class="tabs" aria-label="手册工作区">
-  <button :class="{active:view==='generate'}" @click="view='generate'"><BookOpen :size="15"/> 智能生成</button>
-  <button :class="{active:view==='edit'}" @click="view='edit'">编辑与送审</button>
- </div>
- <iframe v-if="view==='edit'" class="workflow-frame manual-edit-frame" :src="`/workflow-preview.html?projectId=${encodeURIComponent(project.id)}#manual`" title="编辑操作手册" sandbox="allow-scripts allow-same-origin allow-downloads allow-modals"></iframe>
- <template v-else>
-  <form class="manual-section" @submit.prevent="generate">
+  <section class="manual-section">
    <h2 class="panel-title">生成设置</h2>
    <fieldset :disabled="pending||active||loadingSettings" class="manual-inputs">
-    <div class="field full">
-     <input id="manual-folder" ref="folderInput" type="file" aria-label="选择路径" webkitdirectory multiple hidden @change="chooseFolder"/>
-     <input id="manual-upload" ref="zipInput" type="file" accept=".zip,application/zip" hidden @change="chooseZip"/>
-     <div class="actions">
-      <button type="button" class="btn" @click="folderInput.click()">选择路径</button>
-      <button type="button" class="btn" @click="zipInput.click()"><FileArchive :size="14"/> 使用源码 ZIP</button>
-      <span v-if="uploadingZip" class="muted" role="status">正在上传 {{uploadingZip}}</span>
-      <span v-else-if="localSource" class="muted">{{localSource.fileId?'已上传':'已选择'}} {{localSource.name}}</span>
-     </div>
-    </div>
-    <div class="field full"><label for="manual-url">本机测试站点入口</label><input id="manual-url" v-model="url" type="url" placeholder="http://127.0.0.1:3000/" maxlength="500" :readonly="user.role!=='admin'"/><div v-if="user.role==='admin'" class="actions"><button type="button" class="btn" :disabled="url.trim()===savedUrl" @click="saveUrl">保存站点入口</button></div><small v-else-if="!savedUrl" class="muted">请联系管理员设置本项目的测试站点入口。</small></div>
+    <div class="field full"><label for="manual-url">本机测试站点入口</label><input id="manual-url" v-model="url" type="url" placeholder="http://127.0.0.1:3000/" maxlength="500" :readonly="user.role!=='admin'"/><small v-if="user.role!=='admin'&&!savedUrl" class="muted">请联系管理员设置本项目的测试站点入口。</small></div>
     <div class="full actions">
      <label class="manual-verify"><input v-model="ready" type="checkbox" required/> 已在 Google Chrome 中打开测试站点，确认开发者工具可用，且无需登录即可访问</label>
      <button type="button" class="btn btn-sm" aria-haspopup="dialog" @click="devtoolsGuide.showModal()">查看开发者模式打开方式</button>
     </div>
    </fieldset>
-   <div class="actions">
-    <button type="button" class="btn" :class="{'btn-primary':!canGenerate}" :disabled="pending||active||loadingSettings||!sourceSelected" @click="startAnalysis"><Play :size="15"/> 开始分析</button>
-    <button class="btn" :class="{'btn-primary':canGenerate}" :disabled="pending||active||!canContinue">生成截图计划</button>
+   <div class="actions" role="group" aria-label="手册生成操作">
+    <input ref="folderInput" type="file" aria-label="选择路径" webkitdirectory multiple hidden @change="chooseFolder"/>
+    <input ref="zipInput" type="file" accept=".zip,application/zip" hidden @change="chooseZip"/>
+    <button v-if="user.role==='admin'" type="button" class="btn" :disabled="pending||active||loadingSettings||url.trim()===savedUrl" @click="saveUrl">保存站点入口</button>
+    <button type="button" class="btn" :disabled="pending||active||loadingSettings" @click="folderInput.click()">选择路径</button>
+    <button type="button" class="btn" :disabled="pending||active||loadingSettings" @click="zipInput.click()"><FileArchive :size="14"/> 使用源码 ZIP</button>
+    <button type="button" class="btn btn-primary" :disabled="pending||active||loadingSettings||!sourceSelected" @click="startAnalysis"><Play :size="15"/> 开始分析</button>
     <button v-if="active" type="button" class="btn" :disabled="pending" @click="command(()=>api(`${path}/${job.id}`,{method:'DELETE'}))"><Square :size="14"/> 停止任务</button>
     <button type="button" class="btn" :disabled="pending||loadingSettings||!(job||sourceSelected||ready)" @click="reset"><RotateCcw :size="14"/> 重置状态</button>
+    <button v-if="job?.status==='failed'&&canGenerate" type="button" class="btn btn-primary" :disabled="pending||!canContinue" @click="generate">重试当前步骤</button>
+    <template v-if="result.shots">
+     <button v-if="canRetryCapture" type="button" class="btn btn-primary" :disabled="pending" @click="command(()=>api(`${path}/${job.id}/capture`,{method:'POST'}))"><Camera :size="15"/> 重试当前步骤</button>
+     <button v-if="job.status==='complete'" type="button" class="btn btn-primary" :disabled="downloading" @click="downloadDialog.showModal()"><Download :size="15"/> 下载 Word 手册</button>
+    </template>
+    <input ref="finalInput" type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden @change="uploadFinal"/>
+    <button v-if="canUploadFinal" type="button" class="btn" :disabled="uploadingFinal||submitting||manual?.status==='submitted'" @click="finalInput.click()"><Upload :size="15"/> {{uploadingFinal?'正在上传…':'上传并送审'}}</button>
+    <button v-if="finalFile" type="button" class="btn btn-primary" :disabled="!manual||uploadingFinal||submitting||manual.status==='submitted'" @click="submitFinal">送审</button>
    </div>
-  </form>
+   <p v-if="uploadingZip" class="muted" role="status">正在上传 {{uploadingZip}}</p>
+   <p v-else-if="localSource" class="muted">{{localSource.fileId?'已上传':'已选择'}} {{localSource.name}}</p>
+   <p v-if="finalFile" class="muted">已上传 {{finalFile.name}}，待送审</p>
+   <p v-if="manual?.attachmentId" class="muted">最终手册 {{statusName(manual.status)}} · <a :href="fileUrl(project.id,manual.attachmentId)">{{manual.attachmentName}}</a></p>
+   <p v-if="manual?.status==='returned'&&manual.comment" class="alert">{{manual.comment}}</p>
+  </section>
 
+  <dialog ref="downloadDialog" class="modal manual-guide" aria-labelledby="manual-download-title" @cancel.prevent="!downloading&&downloadDialog.close()">
+   <div class="modal-head"><h3 id="manual-download-title">确认手册用途</h3></div>
+   <div class="modal-body"><p>我已确认，AI 生成的内容不可用于软著申请，此次生成仅用作参考内容。</p></div>
+   <div class="modal-foot">
+    <button type="button" class="btn" :disabled="downloading" @click="downloadDialog.close()">取消</button>
+    <button type="button" class="btn btn-primary" :disabled="downloading" @click="confirmDownload">{{downloading?'正在下载…':'确认下载'}}</button>
+   </div>
+  </dialog>
   <dialog ref="devtoolsGuide" class="modal manual-guide" aria-labelledby="manual-guide-title" @keydown.esc.prevent="devtoolsGuide.close()">
    <div class="modal-head">
     <h3 id="manual-guide-title">打开 Chrome 开发者工具</h3>
@@ -252,8 +320,8 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
      :class="{current:runningStage===i||(job?.status==='review'&&job.stage===i),running:runningStage===i,done:phaseDone(i)&&runningStage!==i}"
      :aria-current="runningStage===i||(job?.status==='review'&&job.stage===i)?'step':undefined"><span>{{i}}</span>{{phase}}</li>
    </ol>
-   <p v-if="job?.status==='source_ready'&&canGenerate&&!canContinue" class="alert" role="status">源码分析已完成。保存测试站点入口并勾选 Chrome 确认后，系统会继续生成截图计划。</p>
-   <p v-else-if="job?.status==='source_ready'&&!sourceSelected&&!canGenerate" class="alert" role="status">源码分析已完成。生成截图计划需要可读取的前端源码。</p>
+   <p v-if="job?.status==='source_ready'&&canGenerate&&!canContinue" class="alert" role="status">源码分析已完成。保存测试站点入口并勾选 Chrome 确认后，系统会自动开始截图。</p>
+   <p v-else-if="job?.status==='source_ready'&&!sourceSelected&&!canGenerate" class="alert" role="status">源码分析已完成。自动截图需要可读取的前端源码。</p>
    <p v-if="archiving" class="muted" role="status">正在扫描并提交源码文件。</p>
    <p v-else-if="!job" class="muted">暂无解析任务</p>
    <ul v-else class="manual-events" aria-live="polite" aria-relevant="additions">
@@ -263,12 +331,12 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
   </section>
 
   <div v-if="job||archiving" class="manual-section manual-analysis">
-  <section class="manual-results" aria-labelledby="manual-results-title">
-   <h2 id="manual-results-title" class="panel-title">分析结果</h2>
+  <details class="manual-analysis-panel manual-results">
+   <summary class="panel-title">分析结果</summary>
    <p v-if="!hasResults" class="muted">{{running?'等待分析结果…':'暂无分析结果'}}</p>
    <details v-if="result.sourceSelection"><summary>已读取源码 · {{result.sourceSelection.paths.length}} / {{result.sourceSelection.candidates}} 个候选文件</summary><ul><li v-for="name in result.sourceSelection.paths" :key="name"><code>{{name}}</code></li></ul></details>
    <template v-if="result.sourceSelection?.groups">
-    <details v-for="(label, side) in sourceGroups" :key="side" open>
+    <details v-for="(label, side) in sourceGroups" :key="side">
      <summary>{{label}}分析 · 读取 {{result.sourceSelection.groups[side].readPaths.length}} / {{result.sourceSelection.groups[side].paths.length}} 个识别文件</summary>
      <p v-if="!result.sourceSelection.groups[side].paths.length" class="muted">未识别到{{label}}文件。</p>
      <p v-else-if="!result.sourceSelection.groups[side].readPaths.length" class="muted">没有可读取的 UTF-8 源码。</p>
@@ -279,9 +347,9 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
    <details v-if="result.modules"><summary>系统目标与目录 · {{result.modules.length}} 项</summary><p>{{result.overview}}</p><ol><li v-for="m in result.modules" :key="m.id" :style="{marginInlineStart:`${depth(m)*16}px`}">{{m.title}}</li></ol></details>
    <details v-if="result.pages"><summary>页面与点击路径 · {{result.pages.length}} 页</summary><div v-for="p in result.pages" :key="p.id" class="manual-result"><strong>{{moduleName(p.moduleId)}} / {{p.title}}</strong><p>{{p.description}}</p><p>{{clickPath(p.steps)}}</p><code>{{p.source}}</code></div></details>
    <details v-if="result.operations"><summary>主要按钮与窗口 · {{result.operations.length}} 项</summary><div v-for="o in result.operations" :key="o.id" class="manual-result"><strong>{{result.pages?.find(p=>p.id===o.pageId)?.title}} / {{o.title}}</strong><p>{{o.description}}</p><ol><li v-for="(instruction,i) in o.instructions" :key="i">{{instruction}}</li></ol></div></details>
-  </section>
-  <aside class="manual-log" aria-labelledby="manual-log-title">
-   <h2 id="manual-log-title" class="panel-title">解析日志</h2>
+  </details>
+  <details class="manual-analysis-panel" @toggle="$event.target.open&&logPane&&followLog&&(logPane.scrollTop=logPane.scrollHeight)">
+   <summary id="manual-log-title" class="panel-title">解析日志</summary>
    <p v-if="!modelLogs.length" class="muted">{{running?'等待模型回复…':'暂无模型回复'}}</p>
    <ol v-else ref="logPane" class="manual-log-entries" aria-labelledby="manual-log-title" tabindex="0" @scroll.passive="trackLogScroll">
     <li v-for="entry in modelLogs" :key="entry.id">
@@ -294,7 +362,7 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
      <small v-if="entry.truncated" class="muted">回复过长，仅显示开头。</small>
     </li>
    </ol>
-  </aside>
+  </details>
   </div>
 
   <section v-if="result.shots" class="manual-section manual-results">
@@ -305,14 +373,8 @@ onUnmounted(()=>{disposed=true;clearTimeout(timer)})
     <ul><li v-for="shot in result.skippedShots" :key="shot.operationId" class="manual-result"><strong>{{shot.title}}</strong><p>{{shot.reason}}</p></li></ul>
    </details>
    <details v-if="skippedCaptures.length" open>
-    <summary>执行时跳过的截图 · {{skippedCaptures.length}} 项</summary>
+    <summary>Word 中待补的截图 · {{skippedCaptures.length}} 项</summary>
     <ul><li v-for="shot in skippedCaptures" :key="shot.id" class="manual-result"><strong>{{shot.title}}</strong><p>{{shot.reason}}</p></li></ul>
    </details>
-   <div class="actions">
-    <a v-if="job.status!=='running'||job.stage>=4" class="btn" :href="`/api${path}/${job.id}/plan`" download><Download :size="15"/> 下载截图计划</a>
-    <button v-if="job.status==='review'||(job.status==='failed'&&job.stage===4)" class="btn btn-primary" :disabled="pending" @click="command(()=>api(`${path}/${job.id}/capture`,{method:'POST'}))"><Camera :size="15"/> {{job.status==='review'?'确认计划并截图':'重试截图'}}</button>
-    <a v-if="job.status==='complete'" class="btn btn-primary" :href="`/api${path}/${job.id}/word`" download><Download :size="15"/> 下载 Word 手册</a>
-   </div>
   </section>
- </template>
 </template>

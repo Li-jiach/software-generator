@@ -117,7 +117,7 @@ async def preflight(url: str):
         raise ManualError('未能验证 Google Chrome 的开发者工具连接。') from None
 
 
-async def capture(url: str, shots: list[Shot], folder: Path, report, review, skip):
+async def capture(url: str, shots: list[Shot], folder: Path, images, report, review, skip):
     from playwright.async_api import Error, TimeoutError
 
     origin = capture_origin(url)
@@ -151,9 +151,14 @@ async def capture(url: str, shots: list[Shot], folder: Path, report, review, ski
             await context.route_web_socket('**/*', block_socket)
             page = await context.new_page()
             page.set_default_timeout(4500)
-            response = await page.goto(url, wait_until='domcontentloaded', timeout=16000)
+            try:
+                response = await page.goto(url, wait_until='domcontentloaded', timeout=16000)
+            except Error:
+                if not browser.is_connected():
+                    raise
+                raise UnreachableShot('无法打开测试站点入口。') from None
             if not response or not response.ok:
-                raise ManualError('测试站点没有返回可用页面。')
+                raise UnreachableShot('测试站点没有返回可用页面。')
             for click in shot.steps:
                 locator = page.get_by_role(click.role, name=click.label, exact=True)
                 try:
@@ -206,13 +211,14 @@ async def capture(url: str, shots: list[Shot], folder: Path, report, review, ski
                 raise ShotFailure(f'重拍后截图复核仍未通过。{reason}')
             mode = repair if repair not in used_modes else next(option for option in REPAIR_MODES if option not in used_modes)
 
-    results = {}
     unreachable_pages = set()
-    total = 0
+    total = sum(path.stat().st_size for path in images.values())
     async with browser_session() as playwright:
         browser = await launch(playwright)
         try:
             for shot in shots:
+                if shot.id in images:
+                    continue
                 if shot.pageId in unreachable_pages:
                     await skip(shot, UnreachableShot('所属页面无法到达。'))
                     continue
@@ -228,8 +234,7 @@ async def capture(url: str, shots: list[Shot], folder: Path, report, review, ski
                     raise ManualError('截图总体积过大，请拆分项目范围后重试。')
                 path = folder / f'{shot.id}.jpg'
                 path.write_bytes(image)
-                results[shot.id] = path
-                await report(shot.title, len(results), len(shots))
+                images[shot.id] = path
+                await report(shot.title, len(images), len(shots))
         finally:
             await browser.close()
-    return results

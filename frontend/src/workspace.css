@@ -24,7 +24,8 @@
 @keyframes manual-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.manual-spinner{animation:none}}
 .manual-analysis{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:22px;align-items:start}
-.manual-log{min-width:0;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:#fafbfe}
+.manual-analysis-panel{min-width:0;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:#fafbfe}
+.manual-analysis-panel>summary{cursor:pointer;color:#364366}
 .manual-log-entries{list-style:none;margin:10px 0 0;padding:0 8px 0 0;max-height:420px;overflow:auto;overflow-anchor:none}
 .manual-log-entries li{padding:10px 0;border-top:1px solid var(--line);font-size:12px;line-height:1.6}
 .manual-log-entries pre{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}

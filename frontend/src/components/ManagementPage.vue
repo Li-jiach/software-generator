@@ -91,12 +91,14 @@ async function reject(){
   <details :id="`review-manual-${p.id}`" class="review-section">
    <summary>操作手册 · {{statusName(p.manual.status)}}</summary>
    <p v-if="p.manual.comment">退回意见 {{p.manual.comment}}</p>
+   <a v-if="p.manual.attachmentId" :href="fileUrl(p.id,p.manual.attachmentId)" class="cite-chip">下载 {{p.manual.attachmentName}}</a>
    <details v-for="(chapter,index) in p.manual.chapters" :key="index"><summary>{{chapter.title}} · {{chapter.verified?'确认无误':'待确认'}}</summary><div class="manual-review-body">{{chapter.body}}</div><img v-if="chapter.screenshot?.startsWith('data:image/')" :src="chapter.screenshot" class="image-preview" :alt="chapter.title"/></details>
-   <p v-if="!p.manual.chapters.length" class="muted">尚无手册内容</p>
+   <p v-if="!p.manual.attachmentId&&!p.manual.chapters.length" class="muted">尚无手册内容</p>
    <div v-if="p.manual.status==='submitted'" class="actions"><button class="btn btn-primary" :disabled="busy" @click="review(p.id+'/manual',{revision:p.manual.revision},'approved')">通过</button><button class="btn" :disabled="busy" @click="review(p.id+'/manual',{revision:p.manual.revision},'returned')">不通过</button></div>
    <details v-for="h in p.manualHistory" :key="h.id" @toggle="loadSnapshot($event,p,h)">
     <summary>v{{h.revision}} · {{statusName(h.status)}} · {{h.reviewer}} · {{stamp(h.time)}}</summary>
     <p v-if="h.comment">{{h.comment}}</p>
+    <a v-if="h.attachmentId" :href="fileUrl(p.id,h.attachmentId)" class="cite-chip">下载 {{h.attachmentName}}</a>
     <article v-for="(chapter,index) in snapshots[h.id]" :key="index"><h4>{{chapter.title}}</h4><div class="manual-review-body">{{chapter.body}}</div><img v-if="chapter.screenshot?.startsWith('data:image/')" :src="chapter.screenshot" class="image-preview" :alt="chapter.title"/></article>
    </details>
   </details>

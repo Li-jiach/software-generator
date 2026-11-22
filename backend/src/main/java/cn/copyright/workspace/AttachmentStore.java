@@ -39,6 +39,24 @@ class AttachmentStore {
         if (!path.getParent().equals(directory)) throw new ApiException(400,"附件存储路径不合法");
         return path;
     }
+    void requireManualDocument(Map<String,Object> file) {
+        String name = String.valueOf(file.get("name")).toLowerCase(Locale.ROOT);
+        var resource = resource(file);
+        try {
+            if (name.endsWith(".docx")) {
+                try (var zip = new ZipFile(resource.getFile())) {
+                    if (zip.getEntry("[Content_Types].xml") != null && zip.getEntry("word/document.xml") != null) return;
+                }
+            } else if (name.endsWith(".pdf")) {
+                try (var input = resource.getInputStream()) {
+                    if (Arrays.equals(input.readNBytes(5), new byte[]{'%', 'P', 'D', 'F', '-'})) return;
+                }
+            }
+        } catch (IOException ignored) {
+            // Invalid or unavailable documents cannot be submitted.
+        }
+        throw new ApiException(422, "请上传有效的 Word（.docx）或 PDF 操作手册");
+    }
     Map<String,Object> extract(Map<String,Object> file) {
         String name = String.valueOf(file.get("name"));
         try {

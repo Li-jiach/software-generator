@@ -130,9 +130,11 @@ class Job:
     result: dict = field(default_factory=dict)
     error: str = ''
     shots: list = field(default_factory=list)
+    verified_images: dict[str, Path] = field(default_factory=dict)
     task: asyncio.Task | None = None
     updated: float = field(default_factory=time.monotonic)
     dismissed: bool = False
+    retrying: bool = False
 
     def public(self):
         return {'id': self.id, 'status': self.status, 'stage': self.stage, 'events': self.events,
@@ -506,12 +508,12 @@ def router(auth, configured_model, model_chunks, model_object):
         )
         if skipped_details:
             event(job, 4, f'已记录 {len(skipped_details)} 项无法自动截图的操作及原因。')
-        await progress(job, 4, {'待截图数量': len(shots), '状态': '等待用户确认截图路径'})
         job.shots = shots
         job.result['shots'] = public_shots
         job.result['operations'] = [o.model_dump() for o in final_operations]
         job.result['skippedShots'] = skipped_details
-        job.status = 'review'
+        event(job, 4, '截图计划已生成，正在打开测试站点。')
+        await finish(job)
 
     async def finish(job):
         pages = [Page.model_validate(p) for p in job.result['pages']]
@@ -562,30 +564,20 @@ def router(auth, configured_model, model_chunks, model_object):
             return verdict.approved, reason, verdict.repair
 
         async def report(title, count, total):
-            # Capture counters are factual runtime results, separate from the model's wording.
             job.result['captured'] = count
-            if count == 1 or count == total or count % 5 == 0:
-                await progress(job, 4, {'刚完成截图': title, '已完成': count, '总数': total})
+            event(job, 4, f'「{title}」已截图并通过核验（{count}/{total}）。')
 
-        images = await capture(job.request.url, job.shots, job.directory, report, review, skip)
+        images = job.verified_images
+        await capture(job.request.url, job.shots, job.directory, images, report, review, skip)
         skipped = unreachable + failed
         skipped_ids = {entry['id'] for entry in skipped}
         if set(images) & skipped_ids or set(images) | skipped_ids != {s.id for s in job.shots}:
             raise ManualError('截图结果与确认的计划不一致。')
         confirmed_shots = [shot for shot in job.shots if shot.id in images]
-        reachable_pages = {shot.pageId for shot in confirmed_shots}
-        if not reachable_pages:
-            raise ManualError('没有截图通过核验，无法生成带截图的操作手册。请查看已记录的失败原因。')
-        pages = [page for page in pages if page.id in reachable_pages]
-        operations = [operation for operation in operations if operation.pageId in reachable_pages]
+        verified_pages = {shot.pageId for shot in confirmed_shots}
+        illustrated_pages = [page for page in pages if page.id in verified_pages]
         modules = [Module.model_validate(m) for m in job.result['modules']]
-        retained_modules = {page.moduleId for page in pages}
-        for module in reversed(modules):
-            if module.id in retained_modules and module.parentId is not None:
-                retained_modules.add(module.parentId)
-        modules = [module for module in modules if module.id in retained_modules]
-        job.stage = 5
-        await progress(job, 5, {'已确认截图': len(images), '已跳过': len(skipped), '当前': '撰写手册并套用 Word 模板'})
+        event(job, 5, f'正在生成 Word，已核验截图 {len(images)} 张，待补截图 {len(skipped)} 处。')
         common = {'referenceStyle': REFERENCE_STYLE, 'project': job.request.project, 'basic': job.request.basic}
 
         async def write_section(instructions, data):
@@ -596,10 +588,12 @@ def router(auth, configured_model, model_chunks, model_object):
                 raise ManualError('配置的模型没有返回有效的手册正文。')
             return text.strip()
 
-        overview = await write_section('撰写一段系统简介，功能范围以提供的可达页面为准。', {
-            'overview': job.result['overview'], 'modules': [module.model_dump() for module in modules],
-            'reachablePages': [page.title for page in pages],
-        })
+        overview = job.result['overview']
+        if images:
+            overview = await write_section('撰写一段系统简介。未核验截图的页面仅作源码说明，不得写成已实测。', {
+                'overview': overview, 'modules': [module.model_dump() for module in modules],
+                'verifiedPages': [page.title for page in illustrated_pages],
+            })
 
         async def describe(page):
             return await write_section('撰写一段当前页面的用途和界面说明。具体点击顺序会另行列出。', {
@@ -607,22 +601,22 @@ def router(auth, configured_model, model_chunks, model_object):
                 'captured': [s.title for s in confirmed_shots if s.pageId == page.id],
             })
 
-        prose = {}
-        for i in range(0, len(pages), 3):
-            group = pages[i:i + 3]
+        prose = {page.id: page.description for page in pages if page.id not in verified_pages}
+        for i in range(0, len(illustrated_pages), 3):
+            group = illustrated_pages[i:i + 3]
             paragraphs = await asyncio.gather(*(describe(page) for page in group), return_exceptions=True)
             for page, paragraph in zip(group, paragraphs):
                 if isinstance(paragraph, BaseException):
                     raise paragraph
                 prose[page.id] = paragraph
             if i == 0 or len(prose) == len(pages) or len(prose) % 9 == 0:
-                await progress(job, 5, {'已完成正文页数': len(prose), '总页面数': len(pages), '当前': '准备合并已确认截图和正文'})
+                event(job, 5, f'已准备 {len(prose)}/{len(pages)} 页正文。')
         template = Path(os.getenv('MANUAL_TEMPLATE', ROOT / 'template' / '操作手册模板.docx'))
         if not template.is_file():
             raise ManualError('缺少操作手册 Word 模板。')
         await asyncio.to_thread(render_manual, template, job.directory / 'manual.docx', job.request.project,
-            job.request.basic, overview, modules, pages, operations, prose, confirmed_shots, images)
-        await progress(job, 5, {'已生成': 'Word 操作手册', '已嵌入截图': len(images), '状态': '可下载'})
+            job.request.basic, overview, modules, pages, operations, prose, job.shots, images)
+        event(job, 5, f'Word 已生成，嵌入截图 {len(images)} 张，待补截图 {len(skipped)} 处。')
         job.status = 'complete'
 
     async def run(job, worker):
@@ -724,25 +718,31 @@ def router(auth, configured_model, model_chunks, model_object):
         return get(job_id, owner.owner).public()
 
     @routes.post('/{job_id}/capture')
-    async def confirm(job_id: uuid.UUID, owner: CaptureRequest):
+    async def retry_capture(job_id: uuid.UUID, owner: CaptureRequest):
         job = get(job_id, owner.owner)
-        retry_capture = job.status == 'failed' and job.stage == 4 and bool(job.shots)
-        if job.dismissed or (job.status != 'review' and not retry_capture):
-            raise HTTPException(409, '当前任务不在截图确认阶段。')
-        if any(j.request.owner == job.request.owner and j.status == 'running' for j in jobs.values()):
-            raise HTTPException(409, '已有手册任务正在运行。')
-        if sum(j.status == 'running' for j in jobs.values()) >= 3:
-            raise HTTPException(429, '手册任务已达服务容量，请稍后重试。')
+        if (job.dismissed or job.retrying or job.stage != 4 or not job.shots
+                or job.status not in {'running', 'failed', 'cancelled', 'review'}):
+            raise HTTPException(409, '当前任务无法重试截图。')
         if owner.url != job.request.url:
             raise HTTPException(409, '项目截图入口已变更，请重新开始分析。')
-        job.status = 'running'
-        job.error = ''
-        job.result.pop('captured', None)
-        job.result.pop('unreachableShots', None)
-        job.result.pop('failedShots', None)
-        event(job, 4, '截图计划已确认，正在打开测试站点。')
-        job.task = asyncio.create_task(run(job, finish))
-        return job.public()
+        job.retrying = True
+        try:
+            if job.status == 'running':
+                await stop(job)
+            if job.dismissed or job.stage != 4:
+                raise HTTPException(409, '当前任务已离开截图阶段。')
+            check_capacity(owner.owner)
+            job.status = 'running'
+            job.error = ''
+            job.result.pop('unreachableShots', None)
+            job.result.pop('failedShots', None)
+            count = len(job.verified_images)
+            job.result['captured'] = count
+            event(job, 4, f'正在重试当前截图步骤，保留 {count} 张已核验截图。')
+            job.task = asyncio.create_task(run(job, finish))
+            return job.public()
+        finally:
+            job.retrying = False
 
     @routes.post('/{job_id}/cancel')
     async def cancel(job_id: uuid.UUID, owner: Owner):

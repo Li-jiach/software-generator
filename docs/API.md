@@ -26,10 +26,10 @@
 | GET/POST `/projects/{id}/manual-jobs` | 获取本账号在本项目的最近一次任务；以 `fileId`、`url`、`browserReady` 创建任务 |
 | POST `/projects/{id}/manual-jobs/source` | 以 `fileId` 启动目录分类和前后端源码分析，完成后状态为 `source_ready` |
 | POST `/projects/{id}/manual-jobs/reset` | 停止当前账号在本项目的生成任务，并清空页面显示的任务状态 |
-| POST `/projects/{id}/manual-jobs/{job}/generate` | 以 `url`、`browserReady` 继续已完成的源码分析任务并生成截图计划 |
+| POST `/projects/{id}/manual-jobs/{job}/generate` | 以 `url`、`browserReady` 继续已完成的源码分析任务，自动生成截图计划并截图 |
 | GET/DELETE `/projects/{id}/manual-jobs/{job}` | 查询进度、分析结果和最近的模型回复 `modelLogs`；停止活跃任务 |
-| POST `/projects/{id}/manual-jobs/{job}/capture` | 确认计划并开始截图。通过模型核验的图片计入完成数。不可达目标记入 `unreachableShots`，截图或核验失败记入 `failedShots`，其余目标继续执行。截图阶段失败后可重试 |
-| GET `/projects/{id}/manual-jobs/{job}/plan`、GET `/projects/{id}/manual-jobs/{job}/word` | 下载截图计划 JSON 或生成完成的 Word。计划包含可执行的 `shots` 和注明原因的 `skipped` |
+| POST `/projects/{id}/manual-jobs/{job}/capture` | 重试当前截图步骤，停止仍在运行的截图并保留已通过核验的图片。不可达目标记入 `unreachableShots`，截图或核验失败记入 `failedShots` |
+| GET `/projects/{id}/manual-jobs/{job}/plan`、POST `/projects/{id}/manual-jobs/{job}/word` | 下载内部截图计划 JSON，或通过 `acknowledged:true` 确认用途后下载参考 Word。截图失败时，Word 在对应位置留白并标注待补截图 |
 | GET/DELETE `/assistant/messages` | 按 projectId、scope 查询或清空自己的会话。助手消息的 operations 含实际操作、目标项目和已保存的字段变更 |
 | POST `/assistant/chat`、POST `/assistant/chat/stream` | question、projectId、scope、page、hasUnsaved。scope 可为 knowledge、project 或 history。完成响应包含 operations |
 | GET/PUT `/assistant/config` | 管理员读取或更新模型配置，Key只写 |
@@ -42,8 +42,8 @@
 Python服务仅由Java通过 `X-Service-Token` 调用：`/agent/step`、`/chat`、`/extract`、`/config`、`/config/test` 和 `/manual/jobs`。模型请求采用 `messages`、`model`、`stream:false`，可选 `reasoning_effort`。接口地址包含或不包含 `/chat/completions` 均可。模型错误不将提供方原始响应或Key透传给浏览器。
 
 管理接口 GET/POST `/api/admin/users`、PUT `/api/admin/users/{id}` 均要求管理员。GET `/api/admin/reviews` 返回项目基础填报、手册和审核记录。GET `/api/admin/reviews/{id}/manual/{reviewId}` 返回该次审核的手册章节快照。
-手册接口为GET/PUT /api/projects/{id}/manual、POST /manual/submit、POST /manual/review。写操作需携带手册revision，提交检查章节确认状态。
+手册接口为GET/PUT /api/projects/{id}/manual、POST /manual/submit、POST /manual/review。写操作需携带手册revision，上传到项目的最终操作手册通过 `attachmentId` 送审。历史章节提交仍会校验章节确认状态。
 申报记录新增PUT/DELETE /api/projects/{id}/records/{recordId}，管理员和行政业务办可操作。
 助手先调用 Python `/agent/step` 分析意图，Java 逐次执行附件搜索、读取、状态查询或草稿填写。仅当模型给出 `knowledge(query)` 时，才按重写后的查询词检索并调用模型作答。跨项目附件读取按本次业务授权开放，代填仍经过 `ProjectService.saveForm`。
 
-手册生成任务状态为 `running → review → running → complete`，也可进入 `failed` 或 `cancelled`。`events` 提供模型改写的事实进度，`result` 提供结构化目录、路径、操作和截图数。创建、确认和下载均校验当前账号及项目权限；任务文件不写入审核数据。服务重启会清空任务状态。
+手册生成任务状态为 `running → complete`，也可进入 `failed` 或 `cancelled`。`events` 提供模型改写的事实进度，`result` 提供结构化目录、路径、操作和截图数。创建、确认和下载均校验当前账号及项目权限；任务文件不写入审核数据。服务重启会清空任务状态。

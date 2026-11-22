@@ -59,7 +59,16 @@ class ProjectController {
         var disposition=(safeInline?ContentDisposition.inline():ContentDisposition.attachment()).filename(String.valueOf(f.get("name")),StandardCharsets.UTF_8).build();
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(safeInline?type:"application/octet-stream")).header(HttpHeaders.CONTENT_DISPOSITION,disposition.toString()).header("Content-Security-Policy","sandbox").body(store.resource(f));
     }
-    @DeleteMapping("/projects/{id}/files/{fileId}") @Transactional Object removeFile(@PathVariable String id,@PathVariable String fileId,HttpServletRequest req){var u=auth.current(req);projects.raw(id,u,true);var f=file(id,fileId,u,false);projects.db().update("UPDATE attachments SET deleted=TRUE WHERE id=?",fileId);projects.bump(id);projects.log(id,u,"移除附件",String.valueOf(f.get("name")));return Map.of("ok",true);}
+    @DeleteMapping("/projects/{id}/files/{fileId}") @Transactional Object removeFile(@PathVariable String id,@PathVariable String fileId,HttpServletRequest req){
+        var u=auth.current(req);projects.raw(id,u,true);var f=file(id,fileId,u,false);
+        boolean manualFile=Boolean.TRUE.equals(projects.db().queryForObject("""
+            SELECT EXISTS(SELECT 1 FROM project_manuals WHERE attachment_id=?) OR
+                   EXISTS(SELECT 1 FROM manual_reviews WHERE attachment_id=?)
+            """,Boolean.class,fileId,fileId));
+        if(manualFile)throw new ApiException(409,"附件已用于操作手册审核，需保留审核原件");
+        projects.db().update("UPDATE attachments SET deleted=TRUE WHERE id=?",fileId);projects.bump(id);
+        projects.log(id,u,"移除附件",String.valueOf(f.get("name")));return Map.of("ok",true);
+    }
     @PostMapping("/projects/{id}/files/{fileId}/extract") Object reextract(@PathVariable String id,@PathVariable String fileId,HttpServletRequest req){var u=auth.current(req);var f=file(id,fileId,u,true);var result=store.extract(f);projects.db().update("UPDATE attachments SET extracted_text=?,extraction_warning=? WHERE id=?",result.get("text"),result.get("warning"),fileId);return result;}
     @PutMapping("/projects/{id}/files/{fileId}") @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     Object categorize(@PathVariable String id,@PathVariable String fileId,@RequestBody Map<String,Object> b,HttpServletRequest req){

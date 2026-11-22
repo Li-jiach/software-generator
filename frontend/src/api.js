@@ -15,6 +15,18 @@ export async function api(path, options = {}) {
   return (await request(path, options)).json().catch(() => ({}))
 }
 
+export async function downloadFile(path, options, filename) {
+  const blob = await (await request(path, options)).blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.append(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
 export async function assistantStream(body, onEvent) {
   const response = await request('/assistant/chat/stream', {method:'POST', body})
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()

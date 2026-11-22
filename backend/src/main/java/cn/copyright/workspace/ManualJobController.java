@@ -137,7 +137,21 @@ class ManualJobController {
 
     @GetMapping("/{job}/{kind:word|plan}")
     ResponseEntity<byte[]> download(@PathVariable String id, @PathVariable UUID job, @PathVariable String kind, HttpServletRequest request) {
-        byte[] bytes = ai.download(path(job)+"/"+kind, Map.of("owner",owner(id,request)));
+        String owner = owner(id, request);
+        if (kind.equals("word")) throw new ApiException(428,"请先确认生成手册的参考用途");
+        return downloadFile(job, kind, owner);
+    }
+
+    @PostMapping("/{job}/word")
+    ResponseEntity<byte[]> downloadWord(@PathVariable String id, @PathVariable UUID job,
+                                        @RequestBody Map<String,Object> body, HttpServletRequest request) {
+        String owner = owner(id, request);
+        if (!Boolean.TRUE.equals(body.get("acknowledged"))) throw new ApiException(428,"请先确认生成手册的参考用途");
+        return downloadFile(job, "word", owner);
+    }
+
+    private ResponseEntity<byte[]> downloadFile(UUID job, String kind, String owner) {
+        byte[] bytes = ai.download(path(job)+"/"+kind, Map.of("owner",owner));
         boolean word = kind.equals("word");
         return ResponseEntity.ok().contentType(MediaType.parseMediaType(word ?
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/json"))
