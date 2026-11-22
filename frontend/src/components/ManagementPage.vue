@@ -138,6 +138,12 @@ async function reject(){
 
 
 <style scoped>
+.review-project {
+  background: #fbfcff;
+  border: 1px solid #dce3ef;
+  border-radius: 14px;
+}
+
 .review-section {
   margin-top: 12px;
   padding: 0 16px;
